@@ -1,0 +1,42 @@
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
+OpExecutionMode %main LocalSize 1024 1 1
+OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+OpDecorate %_runtimearray_float ArrayStride 4
+OpMemberDecorate %type_RWStructured_buffer_float 0 Offset 0
+OpDecorate %type_RWStructured_buffer_float BufferBlock 
+OpDecorate %out DescriptorSet 0
+OpDecorate %out Binding 0
+OpDecorate %input DescriptorSet 0
+OpDecorate %input Binding 1
+OpDecorate %weight DescriptorSet 0
+OpDecorate %weight Binding 2
+%uint = OpTypeInt 32 0
+%v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+%void = OpTypeVoid
+%func_result = OpTypeFunction %void 
+%float = OpTypeFloat 32 
+%_ptr_Uniform_float = OpTypePointer Uniform %float
+%_runtimearray_float = OpTypeRuntimeArray %float
+%type_RWStructured_buffer_float = OpTypeStruct %_runtimearray_float
+%_ptr_Uniform_type_RWStructuredBuffer_float = OpTypePointer Uniform %type_RWStructured_buffer_float
+%zeroth_thread_id = OpConstant %uint 0
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input 
+%out = OpVariable %_ptr_Uniform_type_RWStructuredBuffer_float Uniform 
+%input = OpVariable %_ptr_Uniform_type_RWStructuredBuffer_float Uniform 
+%weight = OpVariable %_ptr_Uniform_type_RWStructuredBuffer_float Uniform 
+%main = OpFunction %void None %func_result
+%body = OpLabel
+%layout_ptr = OpLoad %v3uint %gl_GlobalInvocationID 
+%max_thread_id = OpCompositeExtract %uint %layout_ptr 0
+%out_access_chain = OpAccessChain %_ptr_Uniform_float %out %zeroth_thread_id %max_thread_id
+%input_access_chain = OpAccessChain %_ptr_Uniform_float %input %zeroth_thread_id %max_thread_id
+%weight_access_chain = OpAccessChain %_ptr_Uniform_float %weight %zeroth_thread_id %max_thread_id
+%lhs_register = OpLoad %float %input_access_chain 
+%rhs_register = OpLoad %float %weight_access_chain 
+%product = OpFMul %float %lhs_register %rhs_register
+OpStore %out_access_chain %product 
+OpReturn
+OpFunctionEnd
