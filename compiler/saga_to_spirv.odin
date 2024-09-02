@@ -2,6 +2,7 @@ package saga_compiler
 import "core:fmt"
 import "core:log"
 import "core:strings"
+import "core:strconv"
 
 
 Ctx :: struct {
@@ -15,6 +16,7 @@ Ctx :: struct {
     kernel_return:          OpReturn, // Here just for pedantic purposes
     kernel_function_end:    OpFunctionEnd, // ^ What he said..
     annotations:            [dynamic]OpAnnotation,
+    scalar_types:           [dynamic]OpType,
     types:                  [dynamic]OpType,
     constants:              [dynamic]OpConstant,
     variables:              [dynamic]OpVariable,
@@ -24,11 +26,13 @@ Ctx :: struct {
     access_chains:          [dynamic]OpAccessChain,
     binary_ops:             [dynamic]OpBinaryExpr,
     arg_name_ids:           [dynamic]Id,
-    access_chain_map:       map[Id]Id,
-    buffer_scalar_type_id:  Id,       
-    buffer_ptr_type_id:     Id,
-    buffer_storage_class:   Storage_Class,
-    register_ptr_id:        Id,
+    storage_buffer_ids:     [dynamic]Id,
+    arg_scalar_type_map:   map[Id]string,
+    thread_id_map:          map[string]string,
+    scalar_type_map:        map[string]string,
+    register_ptr_map:       map[string]string,
+    runtime_array_map:      map[string]string,
+    array_map:              map[string]string,
     zeroth_thread_id:       Id,
     max_thread_id:          Id,
 }
@@ -70,28 +74,23 @@ translate_module :: proc(ctx: ^Ctx, node: Module) {
 
 translate_layout :: proc(ctx: ^Ctx, node: Layout) {
     execution_mode                  : OpExecutionMode
-    execution_mode.entry_point      = auto_cast("%main")
     execution_mode.mode             = .LocalSize
     execution_mode.mode_operands    = {node.x, node.y, node.z}
     ctx.execution_mode = execution_mode
-
+    
+    // We assume that the global_thread_id is being used, may add a pass which checks if it's not
     decorate                        : OpDecorate
     decorate.target                 = auto_cast("%gl_GlobalInvocationID")
     decorate.decoration             = .BuiltIn
     decorate.decoration_operands    = {Builtin.GlobalInvocationId}
     append(&ctx.annotations, decorate)
 
-    // decorate                        : OpDecorate
-    // decorate.target                 = auto_cast("%gl_LocalInvocationID")
-    // decorate.decoration             = .BuiltIn
-    // decorate.decoration_operands    = {Builtin.LocalInvocationId}
-    // append(&ctx.annotations, decorate)
-
     uint                            : OpTypeInt
     uint.result                     = auto_cast("%uint")
     uint.width                      = 32
     uint.signedness                 = 0
-    append(&ctx.types, uint)
+    append(&ctx.scalar_types, uint)
+    ctx.scalar_type_map["u32"] = "%uint"
 
     uint_vec3                       : OpTypeVector
     uint_vec3.result                = auto_cast("%v3uint")
@@ -111,19 +110,18 @@ translate_layout :: proc(ctx: ^Ctx, node: Layout) {
     variable.storage_class          = .Input
     append(&ctx.variables, variable)
 
+    constant                        : OpConstant
+    constant.result                 = auto_cast("%zeroth_thread_id")
+    constant.result_type            = auto_cast("%uint")
+    constant.value                  = u64(0)
+    append(&ctx.constants, constant)
+    ctx.zeroth_thread_id = auto_cast(constant.result)
+
     load                            : OpLoad
     load.result                     = auto_cast("%layout_ptr")
-    load.result_type                = uint_vec3_ptr.type
-    load.pointer                    = auto_cast(variable.result)
+    load.result_type                = auto_cast("%v3uint")
+    load.pointer                    = auto_cast("%gl_GlobalInvocationID")
     append(&ctx.loads, load)
-
-    composite_extract               : OpCompositeExtract
-    composite_extract.result        = auto_cast("%max_thread_id")
-    composite_extract.result_type   = uint_vec3.component_type
-    composite_extract.composite     = auto_cast(load.result)
-    composite_extract.indexes       = {0}
-    append(&ctx.composites, composite_extract)
-    ctx.max_thread_id = auto_cast(composite_extract.result)
 }
 
 
@@ -136,11 +134,11 @@ translate_kernel :: proc(ctx: ^Ctx, node: Kernel) {
 translate_kernel_signature :: proc(ctx: ^Ctx, node: Kernel_Signature) {
     entry_point                         : OpEntryPoint
     entry_point.execution_model         = .GLCompute
-    entry_point.entry_point             = create_id({"%", node.name}) // A bit inconsistant with us setting it to %main automatically above
+    entry_point.entry_point             = create_id({"%", node.name})
     entry_point.name                    = node.name
     entry_point.interfaces              = {auto_cast("%gl_GlobalInvocationID")}
     ctx.entry_point = entry_point
-
+    ctx.execution_mode.entry_point = ctx.entry_point.entry_point
 
     return_type                         : OpTypeVoid
     return_type.result                  = auto_cast("%void")
@@ -168,22 +166,17 @@ translate_kernel_signature :: proc(ctx: ^Ctx, node: Kernel_Signature) {
 
 
 translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]Argument) {
-    existing_array_types := make(map[Array_Type]bool)
     for node, idx in nodes {
         switch n in node {
         case Array_Argument:
-            // This is... weird...
-            if idx == 0 {
-                translate_array_type(ctx, n.type)
-                existing_array_types[n.type] = true
-            }
-            if idx > 0 && !(n.type in existing_array_types) {
-                translate_array_type(ctx, n.type)
-                existing_array_types[n.type] = true
-            }
-
             arg_name_id := create_id({"%", n.name})
             append(&ctx.arg_name_ids, arg_name_id)
+
+            element_type_name := translate_scalar_type(ctx, n.type.element_type)
+            ctx.arg_scalar_type_map[arg_name_id] = element_type_name
+
+            storage_buffer_id := translate_array_type(ctx, n.type, element_type_name)
+            append(&ctx.storage_buffer_ids, storage_buffer_id)
 
             decorate                        : OpDecorate
             decorate.target                 = create_id({"%", n.name})
@@ -198,23 +191,16 @@ translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]Argument) {
 
             variable                        : OpVariable
             variable.result                 = create_result_id({"%", n.name})
-            variable.result_type            = ctx.buffer_ptr_type_id
-            variable.storage_class          = ctx.buffer_storage_class
+            variable.result_type            = storage_buffer_id
+            variable.storage_class          = .StorageBuffer
             append(&ctx.variables, variable)
-
-            access_chain                    : OpAccessChain
-            access_chain.result             = create_result_id({"%", n.name, "_access_chain"})
-            access_chain.result_type        = ctx.register_ptr_id
-            access_chain.base               = create_id({"%", n.name})
-            access_chain.indexes            = {ctx.zeroth_thread_id, ctx.max_thread_id}
-            append(&ctx.access_chains, access_chain)
-
-            ctx.access_chain_map[arg_name_id] = auto_cast(access_chain.result)
         
-        // This needs to be much more robust / it currently assumes that it's a uint
         case Scalar_Argument:
             arg_name_id := create_id({"%", n.name})
             append(&ctx.arg_name_ids, arg_name_id)
+
+            type_name := translate_scalar_type(ctx, n.type.variant)
+            ctx.arg_scalar_type_map[arg_name_id] = type_name
 
             member_decorate                     : OpMemberDecorate
             member_decorate.structure_type      = auto_cast("%push_constant")
@@ -230,7 +216,7 @@ translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]Argument) {
 
             structure                           : OpTypeStruct
             structure.result                    = auto_cast("%push_constant")
-            structure.members                   = {auto_cast("%uint")} // This needs to be more dynamic
+            structure.members                   = {create_id({"%", type_name})}
             append(&ctx.types, structure)
             
             pointer                             : OpTypePointer
@@ -240,177 +226,242 @@ translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]Argument) {
             append(&ctx.types, pointer)
 
             variable                            : OpVariable
-            variable.result                     = create_result_id({"%", n.name})
+            variable.result                     = auto_cast(arg_name_id)
             variable.result_type                = auto_cast("%_ptr_push_constant")
             variable.storage_class              = .PushConstant
             append(&ctx.variables, variable)
 
-            // Hard coding uint for now
-            pointer.result                      = auto_cast("%_ptr_uint_push_constant")
+            pointer.result                      = create_result_id({"%_ptr_", type_name, "_push_constant"})
             pointer.storage_class               = .PushConstant
-            pointer.type                        = auto_cast("%uint")
+            pointer.type                        = create_id({"%", type_name})
             append(&ctx.types, pointer)
 
             access_chain                        : OpAccessChain
             access_chain.result                 = create_result_id({"%", n.name, "_access_chain"})
-            access_chain.result_type            = auto_cast("%_ptr_uint_push_constant")
-            access_chain.base                   = create_id({"%", n.name})
+            access_chain.result_type            = auto_cast(pointer.result)
+            access_chain.base                   = arg_name_id
             access_chain.indexes                = {ctx.zeroth_thread_id} // Not sure what to do here
             append(&ctx.access_chains, access_chain)
-
-            ctx.access_chain_map[arg_name_id] = auto_cast(access_chain.result)
         } 
     }
 }
 
 
-// For now we are just using the runtimearray structured buffer uniform ptr (phew!) 
-// conversion method, definitely feel like we are overfitting here...
-// Also we need to handle the names smoother, this looks pretty yucky
-translate_array_type :: proc(ctx: ^Ctx, node: Array_Type) {
-    translate_scalar_type(ctx, node.element_type)
-    scalar_type_name := string(ctx.buffer_scalar_type_id)[1:]
+translate_array_type :: proc(ctx: ^Ctx, node: Array_Type, element_type_name: string) -> (storage_buffer_id: Id) {
+    if !(element_type_name in ctx.register_ptr_map) {
+        pointer                                     : OpTypePointer
+        pointer.result                              = create_result_id({"%_ptr_StorageBuffer_", element_type_name})
+        pointer.storage_class                       = .StorageBuffer
+        pointer.type                                = create_id({"%", element_type_name})
+        append(&ctx.types, pointer)
+        ctx.register_ptr_map[element_type_name] = auto_cast(pointer.result)
+    }
 
-    constant                                    : OpConstant
-    constant.result                             = auto_cast("%zeroth_thread_id")
-    constant.result_type                        = auto_cast("%uint")
-    constant.value                              = u32(0)
-    append(&ctx.constants, constant)
-    ctx.zeroth_thread_id = auto_cast(constant.result)
+    switch node.n_elements {
+    case "":
+        if element_type_name in ctx.runtime_array_map {
+            storage_buffer_id = create_id({"%_ptr_StorageBuffer_structured_rtarray_", element_type_name})
+            return 
+        }
+        runtime_array                               : OpTypeRuntimeArray
+        runtime_array.result                        = create_result_id({"%_rtarray_", element_type_name})
+        runtime_array.element_type                  = create_id({"%", element_type_name})
+        append(&ctx.types, runtime_array)
+        ctx.runtime_array_map[element_type_name] = auto_cast(runtime_array.result)
 
-    pointer                                     : OpTypePointer
-    pointer.result                              = create_result_id({"%_ptr_Uniform_", scalar_type_name})
-    pointer.storage_class                       = .Uniform
-    pointer.type                                = ctx.buffer_scalar_type_id
-    append(&ctx.types, pointer)
-    ctx.register_ptr_id = auto_cast(pointer.result)
-    
-    runtime_array                               : OpTypeRuntimeArray
-    runtime_array.result                        = create_result_id({"%_runtimearray_", scalar_type_name})
-    runtime_array.element_type                  = create_id({"%", scalar_type_name})
-    append(&ctx.types, runtime_array)
+        struct_buffer                               : OpTypeStruct
+        struct_buffer.result                        = create_result_id({"%_structured_rtarray_", element_type_name})
+        struct_buffer.members                       = {auto_cast(runtime_array.result)}
+        append(&ctx.types, struct_buffer)
 
-    structured_buffer                           : OpTypeStruct
-    structured_buffer.result                    = create_result_id({"%type_RWStructured_buffer_", scalar_type_name})
-    structured_buffer.members                   = {create_id({"%_runtimearray_", scalar_type_name})}
-    append(&ctx.types, structured_buffer)
+        struct_pointer                              : OpTypePointer
+        struct_pointer.result                       = create_result_id({"%_ptr_StorageBuffer_structured_rtarray_", element_type_name})
+        struct_pointer.storage_class                = .StorageBuffer
+        struct_pointer.type                         = auto_cast(struct_buffer.result)
+        append(&ctx.types, struct_pointer)
 
-    struct_pointer                              : OpTypePointer
-    struct_pointer.result                       = create_result_id({"%_ptr_Uniform_type_RWStructuredBuffer_", scalar_type_name})
-    struct_pointer.storage_class                = .Uniform
-    struct_pointer.type                         = create_id({"%type_RWStructured_buffer_", scalar_type_name})
-    append(&ctx.types, struct_pointer)
-    ctx.buffer_ptr_type_id = auto_cast(struct_pointer.result)
-    ctx.buffer_storage_class = struct_pointer.storage_class
+        rt_array_decorate                           : OpDecorate
+        rt_array_decorate.target                    = create_id({"%_rtarray_", element_type_name})
+        rt_array_decorate.decoration                = .ArrayStride
+        rt_array_decorate.decoration_operands       = {4}
+        append(&ctx.annotations, rt_array_decorate)
 
-    rt_array_decorate                           : OpDecorate
-    rt_array_decorate.target                    = create_id({"%_runtimearray_", scalar_type_name})
-    rt_array_decorate.decoration                = .ArrayStride
-    rt_array_decorate.decoration_operands       = {4}
-    append(&ctx.annotations, rt_array_decorate)
+        struct_decorate                             : OpDecorate
+        struct_decorate.target                      = auto_cast(struct_buffer.result)
+        struct_decorate.decoration                  = .Block
+        append(&ctx.annotations, struct_decorate)
 
-    struct_member_decorate                      : OpMemberDecorate
-    struct_member_decorate.structure_type       = create_id({"%type_RWStructured_buffer_", scalar_type_name})
-    struct_member_decorate.member               = 0
-    struct_member_decorate.decoration           = .Offset
-    struct_member_decorate.decoration_operands  = {0}
-    append(&ctx.annotations, struct_member_decorate)
+        struct_member_decorate                      : OpMemberDecorate
+        struct_member_decorate.structure_type       = auto_cast(struct_buffer.result)
+        struct_member_decorate.member               = 0
+        struct_member_decorate.decoration           = .Offset
+        struct_member_decorate.decoration_operands  = {0}
+        append(&ctx.annotations, struct_member_decorate)
 
-    struct_decorate                             : OpDecorate
-    struct_decorate.target                      = create_id({"%type_RWStructured_buffer_", scalar_type_name})
-    struct_decorate.decoration                  = .BufferBlock
-    append(&ctx.annotations, struct_decorate)
+        storage_buffer_id = auto_cast(struct_pointer.result)
+        return
+
+    case:
+        if element_type_name in ctx.array_map {
+            storage_buffer_id = create_id({"%_ptr_StorageBuffer_structured_array_", element_type_name})
+            return 
+        }
+        constant                                    : OpConstant
+        constant.result                             = create_result_id({"%uint_", node.n_elements})
+        constant.result_type                        = auto_cast("%uint")
+        constant.value                              = strconv.atoi(node.n_elements)
+        append(&ctx.constants, constant)
+
+        array                                       : OpTypeArray
+        array.result                                = create_result_id({"%_array_", element_type_name})
+        array.element_type                          = create_id({"%", element_type_name})
+        array.length                                = auto_cast(constant.result)
+        append(&ctx.types, array)
+        ctx.array_map[element_type_name] = auto_cast(array.result)
+
+        struct_buffer                               : OpTypeStruct
+        struct_buffer.result                        = create_result_id({"%_structured_array_", element_type_name})
+        struct_buffer.members                       = {auto_cast(array.result)}
+        append(&ctx.types, struct_buffer)
+
+        struct_pointer                              : OpTypePointer
+        struct_pointer.result                       = create_result_id({"%_ptr_StorageBuffer_structured_array_", element_type_name})
+        struct_pointer.storage_class                = .StorageBuffer
+        struct_pointer.type                         = auto_cast(struct_buffer.result)
+        append(&ctx.types, struct_pointer)
+
+        array_decorate                              : OpDecorate
+        array_decorate.target                       = create_id({"%_array_", element_type_name})
+        array_decorate.decoration                   = .ArrayStride
+        array_decorate.decoration_operands          = {4}
+        append(&ctx.annotations, array_decorate)
+
+        struct_decorate                             : OpDecorate
+        struct_decorate.target                      = auto_cast(struct_buffer.result)
+        struct_decorate.decoration                  = .Block
+        append(&ctx.annotations, struct_decorate)
+
+        struct_member_decorate                      : OpMemberDecorate
+        struct_member_decorate.structure_type       = auto_cast(struct_buffer.result)
+        struct_member_decorate.member               = 0
+        struct_member_decorate.decoration           = .Offset
+        struct_member_decorate.decoration_operands  = {0}
+        append(&ctx.annotations, struct_member_decorate)
+
+        storage_buffer_id = auto_cast(struct_pointer.result)
+        return
+    }
 }
 
 
-translate_scalar_type :: proc(ctx: ^Ctx, t: string) {
-    switch t {
-    case "bool": 
-        type            : OpTypeBool
-        type.result     = create_result_id({"%", "bool"})
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "i8": 
-        type            : OpTypeInt
-        type.result     = create_result_id({"%", "int"})
-        type.width      = 8
-        type.signedness = 1
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "i16": 
-        type            : OpTypeInt
-        type.result     = create_result_id({"%", "int"})
-        type.width      = 16
-        type.signedness = 1
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "i32": 
-        type            : OpTypeInt
-        type.result     = create_result_id({"%", "int"})
-        type.width      = 32
-        type.signedness = 1
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "i64": 
-        type            : OpTypeInt
-        type.result     = create_result_id({"%", "int"})
-        type.width      = 64
-        type.signedness = 1
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "u8": 
-        type            : OpTypeInt
-        type.result     = create_result_id({"%", "uint"})
-        type.width      = 8
-        type.signedness = 0
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "u16": 
-        type            : OpTypeInt
-        type.result     = create_result_id({"%", "uint"})
-        type.width      = 16
-        type.signedness = 0
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "u32": 
-        type            : OpTypeInt
-        type.result     = create_result_id({"%", "uint"})
-        type.width      = 32
-        type.signedness = 0
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "u64": 
-        type            : OpTypeInt
-        type.result     = create_result_id({"%", "uint"})
-        type.width      = 64
-        type.signedness = 0
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    // Not handling FP Encoding for OpTypeFloat quite yet
-    case "f16": 
-        type            : OpTypeFloat
-        type.result     = create_result_id({"%", "float"})
-        type.width      = 16
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "f32": 
-        type            : OpTypeFloat
-        type.result     = create_result_id({"%", "float"})
-        type.width      = 32
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "f64": 
-        type            : OpTypeFloat
-        type.result     = create_result_id({"%", "float"})
-        type.width      = 64
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
-    case "f128": 
-        type            : OpTypeFloat
-        type.result     = create_result_id({"%", "float"})
-        type.width      = 128
-        append(&ctx.types, type)
-        ctx.buffer_scalar_type_id = auto_cast(type.result)
+translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
+    if t in ctx.scalar_type_map { 
+        type_name = ctx.scalar_type_map[t][1:] 
+        return
+    }
+    else {
+        switch t {
+        case "bool": 
+            type            : OpTypeBool
+            type.result     = create_result_id({"%", "bool"})
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "i8": 
+            type            : OpTypeInt
+            type.result     = create_result_id({"%", "int"})
+            type.width      = 8
+            type.signedness = 1
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "i16": 
+            type            : OpTypeInt
+            type.result     = create_result_id({"%", "int"})
+            type.width      = 16
+            type.signedness = 1
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "i32": 
+            type            : OpTypeInt
+            type.result     = create_result_id({"%", "int"})
+            type.width      = 32
+            type.signedness = 1
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "i64": 
+            type            : OpTypeInt
+            type.result     = create_result_id({"%", "int"})
+            type.width      = 64
+            type.signedness = 1
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "u8": 
+            type            : OpTypeInt
+            type.result     = create_result_id({"%", "uint"})
+            type.width      = 8
+            type.signedness = 0
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "u16": 
+            type            : OpTypeInt
+            type.result     = create_result_id({"%", "uint"})
+            type.width      = 16
+            type.signedness = 0
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "u32": 
+            type            : OpTypeInt
+            type.result     = create_result_id({"%", "uint"})
+            type.width      = 32
+            type.signedness = 0
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "u64": 
+            type            : OpTypeInt
+            type.result     = create_result_id({"%", "uint"})
+            type.width      = 64
+            type.signedness = 0
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        // Not handling FP Encoding for OpTypeFloat quite yet
+        case "f16": 
+            type            : OpTypeFloat
+            type.result     = create_result_id({"%", "float"})
+            type.width      = 16
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "f32": 
+            type            : OpTypeFloat
+            type.result     = create_result_id({"%", "float"})
+            type.width      = 32
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "f64": 
+            type            : OpTypeFloat
+            type.result     = create_result_id({"%", "float"})
+            type.width      = 64
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        case "f128": 
+            type            : OpTypeFloat
+            type.result     = create_result_id({"%", "float"})
+            type.width      = 128
+            type_name       = auto_cast(type.result[1:])
+            ctx.scalar_type_map[t] = auto_cast(type.result)
+            append(&ctx.scalar_types, type)
+        }
+        return
     }
 }
 
@@ -425,7 +476,7 @@ translate_kernel_body :: proc(ctx: ^Ctx, nodes: [dynamic]Expression) {
         case Variable_Expression:
             #partial switch e in n.value {
             case Binary_Expression:
-                translate_binary_op(ctx, e) 
+                translate_binary_op(ctx, n, e) 
             case:
                 fmt.println(n)
                 log.error("I'm afraid only binary expressions are supported at this time.. a pity, tisn't it?")
@@ -438,39 +489,51 @@ translate_kernel_body :: proc(ctx: ^Ctx, nodes: [dynamic]Expression) {
 }
 
 // Only works on kernel args as of now
-translate_binary_op :: proc(ctx: ^Ctx, node: Binary_Expression) {
-    // switch n in node.lhs {
-    // case .Literal:
-    // case .Variable_Expression:
-    // case .Binary_Expression:
-    // case .Call_Expression:
-    // }
+translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: Binary_Expression) {
+    lhs_id              := create_id({"%", op_node.lhs.value})
+    rhs_id              := create_id({"%", op_node.rhs.value})
 
+    lhs_max_thread_id   := translate_thread_id(ctx, op_node.lhs.thread_id)
+    rhs_max_thread_id   := translate_thread_id(ctx, op_node.rhs.thread_id)
 
-    // Need error handling here
-    lhs_id := create_id({"%", node.lhs.value})
-    rhs_id := create_id({"%", node.rhs.value})
+    lhs_element_type    := ctx.arg_scalar_type_map[lhs_id]
+    rhs_element_type    := ctx.arg_scalar_type_map[rhs_id]
+    assert(lhs_element_type == rhs_element_type)
 
-    lhs_load                : OpLoad
-    lhs_load.result         = auto_cast("%lhs_register")
-    lhs_load.result_type    = ctx.buffer_scalar_type_id
-    lhs_load.pointer        = ctx.access_chain_map[lhs_id]
+    lhs_access_chain                : OpAccessChain
+    lhs_access_chain.result         = create_result_id({string(lhs_id), "_access_chain"})
+    lhs_access_chain.result_type    = auto_cast(ctx.register_ptr_map[lhs_element_type])
+    lhs_access_chain.base           = lhs_id
+    lhs_access_chain.indexes        = {ctx.zeroth_thread_id, lhs_max_thread_id}
+    append(&ctx.access_chains, lhs_access_chain)
+
+    rhs_access_chain                : OpAccessChain
+    rhs_access_chain.result         = create_result_id({string(rhs_id), "_access_chain"})
+    rhs_access_chain.result_type    = auto_cast(ctx.register_ptr_map[rhs_element_type])
+    rhs_access_chain.base           = rhs_id
+    rhs_access_chain.indexes        = {ctx.zeroth_thread_id, rhs_max_thread_id}
+    append(&ctx.access_chains, rhs_access_chain)
+
+    lhs_load                        : OpLoad
+    lhs_load.result                 = auto_cast("%lhs_register")
+    lhs_load.result_type            = create_id({"%", lhs_element_type})
+    lhs_load.pointer                = auto_cast(lhs_access_chain.result)
     append(&ctx.loads, lhs_load)
 
-    rhs_load                : OpLoad
-    rhs_load.result         = auto_cast("%rhs_register")
-    rhs_load.result_type    = ctx.buffer_scalar_type_id
-    rhs_load.pointer        = ctx.access_chain_map[rhs_id]
+    rhs_load                        : OpLoad
+    rhs_load.result                 = auto_cast("%rhs_register")
+    rhs_load.result_type            = create_id({"%", rhs_element_type})
+    rhs_load.pointer                = auto_cast(rhs_access_chain.result)
     append(&ctx.loads, rhs_load)
 
     lhs_load_id: Id = auto_cast(lhs_load.result)
     rhs_load_id: Id = auto_cast(rhs_load.result)
 
     result: Result_Id
-    type := string(ctx.buffer_scalar_type_id)
+    type := string(lhs_load.result_type)
     switch type {
     case "%int":
-        switch node.op {
+        switch op_node.op {
         case "+":
             op: OpIAdd
             op.result = auto_cast("%sum")
@@ -506,7 +569,7 @@ translate_binary_op :: proc(ctx: ^Ctx, node: Binary_Expression) {
         }
 
     case "%uint":
-        switch node.op {
+        switch op_node.op {
         case "+":
             op: OpIAdd
             op.result = auto_cast("%sum")
@@ -541,7 +604,7 @@ translate_binary_op :: proc(ctx: ^Ctx, node: Binary_Expression) {
             result = op.result
         }
     case "%float":
-        switch node.op {
+        switch op_node.op {
         case "+":
             op: OpFAdd
             op.result = auto_cast("%sum")
@@ -576,11 +639,60 @@ translate_binary_op :: proc(ctx: ^Ctx, node: Binary_Expression) {
             result = op.result
         }
     }
+
+    result_name_id                  := create_id({"%", root_node.name})
+    result_max_thread_id            := translate_thread_id(ctx, root_node.thread_id)
+    result_element_type             := ctx.arg_scalar_type_map[result_name_id]
+
+    result_access_chain             : OpAccessChain
+    result_access_chain.result      = create_result_id({string(result_name_id), "_access_chain"})
+    result_access_chain.result_type = auto_cast(ctx.register_ptr_map[result_element_type])
+    result_access_chain.base        = result_name_id
+    result_access_chain.indexes     = {ctx.zeroth_thread_id, result_max_thread_id}
+    append(&ctx.access_chains, result_access_chain)
     
     store: OpStore
-    store.pointer = auto_cast(ctx.access_chain_map["%out"]) // Cheating a bit here
+    store.pointer = auto_cast(result_access_chain.result)
     store.object = auto_cast(result)
     append(&ctx.stores, store)
+}
+
+// TODO: Handle more cases
+translate_thread_id :: proc(ctx: ^Ctx, thread_id: string) -> (max_thread_id: Id){
+    if thread_id in ctx.thread_id_map {
+        max_thread_id = auto_cast(ctx.thread_id_map[thread_id])
+        return
+    }
+    switch thread_id {
+    case "tid.x":
+        composite_extract               : OpCompositeExtract
+        composite_extract.result        = auto_cast("%max_thread_id_x")
+        composite_extract.result_type   = auto_cast("%uint")
+        composite_extract.composite     = auto_cast("%layout_ptr")
+        composite_extract.indexes       = {0}
+        max_thread_id = auto_cast(composite_extract.result)
+        ctx.thread_id_map["tid.x"] = auto_cast(composite_extract.result)
+        append(&ctx.composites, composite_extract)
+    case "tid.y":
+        composite_extract               : OpCompositeExtract
+        composite_extract.result        = auto_cast("%max_thread_id_y")
+        composite_extract.result_type   = auto_cast("%uint")
+        composite_extract.composite     = auto_cast("%layout_ptr")
+        composite_extract.indexes       = {1}
+        max_thread_id = auto_cast(composite_extract.result)
+        ctx.thread_id_map["tid.y"] = auto_cast(composite_extract.result)
+        append(&ctx.composites, composite_extract)
+    case "tid.z":
+        composite_extract               : OpCompositeExtract
+        composite_extract.result        = auto_cast("%max_thread_id_z")
+        composite_extract.result_type   = auto_cast("%uint")
+        composite_extract.composite     = auto_cast("%layout_ptr")
+        composite_extract.indexes       = {2}
+        max_thread_id = auto_cast(composite_extract.result)
+        ctx.thread_id_map["tid.z"] = auto_cast(composite_extract.result)
+        append(&ctx.composites, composite_extract)
+    }
+    return
 }
 
 
@@ -643,5 +755,4 @@ clean_context :: proc(ctx: ^Ctx) {
         }
     }
 }
-
 

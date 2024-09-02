@@ -94,9 +94,10 @@ Expression :: union {
 
 
 Variable_Expression :: struct {
-    name:  string,
-    type:  Type,
-    value: ^Expression,
+    name:       string,
+    thread_id:  string,
+    type:       Type,
+    value:      ^Expression,
 }
 
 
@@ -114,8 +115,9 @@ Binary_Expression :: struct {
 
 
 Literal :: struct {
-    value:         string,
-    is_identifier: bool,
+    value:          string,
+    thread_id:      string,
+    is_identifier:  bool,
 }
 
 

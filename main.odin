@@ -31,17 +31,17 @@ compile :: proc() -> (spirv_file: string) {
 run :: proc(spirv_file: string = "./glsl_examples/rms_norm.spv") {
     spirv_bytecode, ok := os.read_entire_file(spirv_file)
 
-    input_data  := rt.fill_f32(1024, 5)
+    input_data  := rt.fill_f32(1024, 9)
     weight_data := rt.fill_f32(1024, 5)
-    // pc_data: [1]u32 = {256}
+    pc_data: [1]u32 = {1024}
 
     input   := rt.create_kernel_input(&input_data) 
     weight  := rt.create_kernel_input(&weight_data) 
     output  := rt.create_kernel_output(&input_data)
-    // n_elem  := rt.create_push_constant(&pc_data)
+    n_elem  := rt.create_push_constant(&pc_data)
 
-    kernel_operands: [3]rt.Kernel_Operand = {output, input, weight}
-    // kernel_operands: [4]rt.Kernel_Operand = {output, input, weight, n_elem}
+    // kernel_operands: [3]rt.Kernel_Operand = {output, input, weight}
+    kernel_operands: [4]rt.Kernel_Operand = {output, input, weight, n_elem}
     rt.vulkan_launch_kernel(kernel_operands, spirv_bytecode)
 }
 

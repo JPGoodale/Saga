@@ -14,10 +14,10 @@ package saga_compiler
 Id                  :: distinct string // Maybe change to runes
 Result_Id           :: distinct string // Maybe change to runes
 
-Unsigned_Integer    :: union {u8, u16, u32, u64, u128}
-Signed_Integer      :: union {u8, u16, u32, u64, u128}
-Integer             :: union {u8, u16, u32, u64, u128, i8, i16, i32, i64, i128}
-Numeric_Type        :: union {u8, u16, u32, u64, u128, i8, i16, i32, i128, i64, f16, f32, f64}
+Unsigned_Integer    :: union {u8, u16, u32, u64, u128, uint}
+Signed_Integer      :: union {u8, u16, u32, u64, u128, int}
+Integer             :: union {u8, u16, u32, u64, u128, uint, i8, i16, i32, i64, i128, int}
+Numeric_Type        :: union {u8, u16, u32, u64, u128, uint, i8, i16, i32, i64, i128, int, f16, f32, f64}
 
 
 // ----------------------------------------------------------------------------------------------------

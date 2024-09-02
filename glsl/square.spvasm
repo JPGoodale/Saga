@@ -34,41 +34,54 @@
 
        %void = OpTypeVoid
           %3 = OpTypeFunction %void
+
        %uint = OpTypeInt 32 0
-%_ptr_Function_uint = OpTypePointer Function %uint
      %v3uint = OpTypeVector %uint 3
 %_ptr_Input_v3uint = OpTypePointer Input %v3uint
-%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
-     %uint_0 = OpConstant %uint 0
+
 %_ptr_Input_uint = OpTypePointer Input %uint
+%_ptr_Function_uint = OpTypePointer Function %uint
+
 %PushConstants = OpTypeStruct %uint
 %_ptr_PushConstant_PushConstants = OpTypePointer PushConstant %PushConstants
-          %_ = OpVariable %_ptr_PushConstant_PushConstants PushConstant
+
         %int = OpTypeInt 32 1
-      %int_0 = OpConstant %int 0
 %_ptr_PushConstant_uint = OpTypePointer PushConstant %uint
+
        %bool = OpTypeBool
+
       %float = OpTypeFloat 32
 %_runtimearr_float = OpTypeRuntimeArray %float
-%ResultBuffer = OpTypeStruct %_runtimearr_float
-%_ptr_StorageBuffer_ResultBuffer = OpTypePointer StorageBuffer %ResultBuffer
-        %__0 = OpVariable %_ptr_StorageBuffer_ResultBuffer StorageBuffer
 %_runtimearr_float_0 = OpTypeRuntimeArray %float
-    %XBuffer = OpTypeStruct %_runtimearr_float_0
-%_ptr_StorageBuffer_XBuffer = OpTypePointer StorageBuffer %XBuffer
-        %__1 = OpVariable %_ptr_StorageBuffer_XBuffer StorageBuffer
-%_ptr_StorageBuffer_float = OpTypePointer StorageBuffer %float
 %_runtimearr_float_1 = OpTypeRuntimeArray %float
+
+%ResultBuffer = OpTypeStruct %_runtimearr_float
+    %XBuffer = OpTypeStruct %_runtimearr_float_0
     %WBuffer = OpTypeStruct %_runtimearr_float_1
+
+%_ptr_StorageBuffer_ResultBuffer = OpTypePointer StorageBuffer %ResultBuffer
+%_ptr_StorageBuffer_XBuffer = OpTypePointer StorageBuffer %XBuffer
 %_ptr_StorageBuffer_WBuffer = OpTypePointer StorageBuffer %WBuffer
+
+%_ptr_StorageBuffer_float = OpTypePointer StorageBuffer %float
+
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+         %id = OpVariable %_ptr_Function_uint Function
+
+          %_ = OpVariable %_ptr_PushConstant_PushConstants PushConstant
+
+        %__0 = OpVariable %_ptr_StorageBuffer_ResultBuffer StorageBuffer
+        %__1 = OpVariable %_ptr_StorageBuffer_XBuffer StorageBuffer
         %__2 = OpVariable %_ptr_StorageBuffer_WBuffer StorageBuffer
+
+     %uint_0 = OpConstant %uint 0
    %uint_256 = OpConstant %uint 256
+      %int_0 = OpConstant %int 0
      %uint_1 = OpConstant %uint 1
 %gl_WorkGroupSize = OpConstantComposite %v3uint %uint_256 %uint_1 %uint_1
 
        %main = OpFunction %void None %3
           %5 = OpLabel
-         %id = OpVariable %_ptr_Function_uint Function
          %14 = OpAccessChain %_ptr_Input_uint %gl_GlobalInvocationID %uint_0
          %15 = OpLoad %uint %14
                OpStore %id %15

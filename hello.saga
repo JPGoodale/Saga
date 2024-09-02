@@ -2,6 +2,7 @@ module hellope
 
 layout [1024, 1, 1]
 
-main :: kernel(out: [1024]f32, input: [1024]f32, weight: [1024]f32) {
-    out = input * weight
+main :: kernel(out: [1024]f32, input: [1024]f32, weight: [1024]f32, N: u32) {
+    out[tid.x] = input[tid.x] * weight[tid.x]
 }
+

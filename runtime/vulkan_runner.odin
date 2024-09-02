@@ -569,7 +569,7 @@ vulkan_print_results :: proc(ctx: ^Vulkan_Context, N: uint, idx: int = 0) {
     vulkan_check(vk.MapMemory(ctx.device, ctx.device_memory[idx], ctx.buffer_offsets[idx], ctx.buffer_sizes[idx], nil, &out_buffer_ptr))
 
     out_buffer_data := ([^]f32)(out_buffer_ptr)
-    for i: uint = 0; i < N; i+=1 do fmt.println(out_buffer_data[i])
+    for i: uint = 0; i < N; i+=1 do fmt.printf("%v ", out_buffer_data[i])
 
     vk.UnmapMemory(ctx.device, ctx.device_memory[idx])
 }
