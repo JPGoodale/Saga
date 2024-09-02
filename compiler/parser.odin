@@ -217,10 +217,6 @@ parse_kernel_args :: proc(p: ^Parser) -> (args: [dynamic]Argument, err: Parsing_
             parser_capture_variable(p, arg_node.name, arg_type)
         }
 
-        // arg_node := Argument{arg_name_token.value, arg_type}
-        // append(&args, arg_node)
-        // parser_capture_variable(p, arg_node.name, arg_type)
-
         delimiter_token = parser_scan(p)
         if delimiter_token.type == .Close_Parenthese do break
         err = expect_token_type(delimiter_token, .Comma)
@@ -243,14 +239,14 @@ parse_literal :: proc(p: ^Parser) -> (node: Literal, err: Parsing_Error) {
     #partial switch token.type {
     case .Identifier:
         if parser_peek(p).type == .Open_Bracket {
-            index := parse_array_index(p)
-            node = Literal{fmt.tprintf("%s[%s]", token.value, index), true}
+            thread_index := parse_array_index(p)
+            node = Literal{token.value, thread_index, true}
         } 
         else { 
-            node = Literal{token.value, true} 
+            node = Literal{token.value, "", true} 
         }
     case .Literal:
-        node = Literal{token.value, false}
+        node = Literal{token.value, "", false}
     case:
         err = .Syntax_Error
         log.errorf("Expected literal or identifier, got %v", token.type)
@@ -289,8 +285,23 @@ parse_expression :: proc(p: ^Parser) -> (node: Expression, err: Parsing_Error) {
 
 
 parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expression, err: Parsing_Error) {
-    operator_token := parser_advance(p)
-    #partial switch operator_token.type {
+    next_token := parser_advance(p)
+    #partial switch next_token.type {
+    case .Open_Bracket:
+        thread_index := parser_advance(p).value
+        parser_advance(p)
+        parser_advance(p)
+        inferred_type, found := parser_get_variable_type(p, name_token.value)
+        if !found {
+            err = .Syntax_Error
+            log.errorf("Variable %s used before declaration", name_token.value)
+            return
+        }
+        value: Expression
+        value, err = parse_expression(p)
+        if err != nil do return
+        node = Variable_Expression{name_token.value, thread_index, inferred_type, new_clone(value)}
+        return
     case .Colon:
         type_token := parser_advance(p)
         err = expect_token_type(type_token, .Type_Identifier)
@@ -306,7 +317,7 @@ parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expre
         value, err = parse_expression(p)
         if err != nil do return
 
-        node = Variable_Expression{name_token.value, type, new_clone(value)}
+        node = Variable_Expression{name_token.value, "", type, new_clone(value)}
         parser_capture_variable(p, name_token.value, type)
         return
     case .Variable_Assignment_Operator:
@@ -320,7 +331,7 @@ parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expre
         value, err = parse_expression(p)
         if err != nil do return
 
-        node = Variable_Expression{name_token.value, inferred_type, new_clone(value)}
+        node = Variable_Expression{name_token.value, "", inferred_type, new_clone(value)}
         return
     case .Constant_Assignment_Operator:
         log.errorf("All constants must be declared outside of kernel.") 
