@@ -27,7 +27,7 @@ Ctx :: struct {
     binary_ops:             [dynamic]OpBinaryExpr,
     arg_name_ids:           [dynamic]Id,
     storage_buffer_ids:     [dynamic]Id,
-    arg_scalar_type_map:   map[Id]string,
+    arg_scalar_type_map:    map[Id]string,
     thread_id_map:          map[string]string,
     scalar_type_map:        map[string]string,
     register_ptr_map:       map[string]string,
