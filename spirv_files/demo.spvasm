@@ -1,0 +1,92 @@
+OpCapability Shader
+%glsl = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
+OpExecutionMode %main LocalSize 128 1 1
+OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+OpDecorate %_arr_float_uint_128 ArrayStride 4
+OpDecorate %_struct_5 Block
+OpMemberDecorate %_struct_5 0 Offset 0
+OpDecorate %result DescriptorSet 0
+OpDecorate %result Binding 0
+OpDecorate %vector DescriptorSet 0
+OpDecorate %vector Binding 1
+OpDecorate %matrix DescriptorSet 0
+OpDecorate %matrix Binding 2
+
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+
+%uint_0 = OpConstant %uint 0
+%uint_128 = OpConstant %uint 128
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+%uint_1 = OpConstant %uint 1
+%float_0 = OpConstant %float 0
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+%v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+%void = OpTypeVoid
+%17 = OpTypeFunction %void
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+%_ptr_Function_float = OpTypePointer Function %float
+%_ptr_Function_uint = OpTypePointer Function %uint
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+%_ptr_StorageBuffer_float = OpTypePointer StorageBuffer %float
+%_arr_float_uint_128 = OpTypeArray %float %uint_128
+%_struct_5 = OpTypeStruct %_arr_float_uint_128
+%_ptr_StorageBuffer__struct_5 = OpTypePointer StorageBuffer %_struct_5
+
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+%result = OpVariable %_ptr_StorageBuffer__struct_5 StorageBuffer
+%vector = OpVariable %_ptr_StorageBuffer__struct_5 StorageBuffer
+%matrix = OpVariable %_ptr_StorageBuffer__struct_5 StorageBuffer
+
+%main = OpFunction %void None %17
+%entry = OpLabel
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+%sum = OpVariable %_ptr_Function_float Function %float_0
+%i = OpVariable %_ptr_Function_uint Function %uint_0
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+%23 = OpLoad %v3uint %gl_GlobalInvocationID
+%row_id = OpCompositeExtract %uint %23 0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+OpBranch %loop_header
+%loop_header = OpLabel
+%30 = OpLoad %uint %i
+%31 = OpULessThan %bool %30 %uint_128
+OpLoopMerge %loop_merge %loop_continue None
+OpBranchConditional %31 %loop_body %loop_merge
+%loop_body = OpLabel
+%34 = OpIMul %uint %row_id %uint_128
+%35 = OpIAdd %uint %34 %30
+%36 = OpAccessChain %_ptr_StorageBuffer_float %matrix %uint_0 %35
+%37 = OpAccessChain %_ptr_StorageBuffer_float %vector %uint_0 %30
+%38 = OpLoad %float %36
+%39 = OpLoad %float %37
+%40 = OpFMul %float %38 %39
+%41 = OpLoad %float %sum
+%42 = OpFAdd %float %41 %40
+OpStore %sum %42
+OpBranch %loop_continue
+%loop_continue = OpLabel
+%43 = OpLoad %uint %i
+%44 = OpIAdd %uint %43 %uint_1
+OpStore %i %44
+OpBranch %loop_header
+%loop_merge = OpLabel
+%45 = OpLoad %float %sum
+%46 = OpAccessChain %_ptr_StorageBuffer_float %result %uint_0 %row_id
+%activation = OpExtInst %float %glsl Tanh %45
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+OpStore %46 %activation
+OpReturn
+OpFunctionEnd

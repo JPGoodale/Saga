@@ -10,9 +10,9 @@ import rt "./runtime"
 
 main :: proc() {
     context.logger = log.create_console_logger()
-    spirv_file := compile()
-    run(spirv_file)
-    // run()
+    // spirv_file := compile()
+    // run(spirv_file)
+    run()
 }
 
 
@@ -28,20 +28,20 @@ compile :: proc() -> (spirv_file: string) {
 }
 
 
-run :: proc(spirv_file: string = "./glsl_examples/rms_norm.spv") {
+run :: proc(spirv_file: string = "./spirv_files/demo.spv") {
     spirv_bytecode, ok := os.read_entire_file(spirv_file)
 
-    input_data  := rt.fill_f32(1024, 9)
-    weight_data := rt.fill_f32(1024, 5)
-    pc_data: [1]u32 = {1024}
+    input_data  := rt.fill_f32(128, 0.2)
+    weight_data := rt.fill_f32(128*128, 0.001)
 
     input   := rt.create_kernel_input(&input_data) 
     weight  := rt.create_kernel_input(&weight_data) 
+    // Would be nice to write the output directly to this empty buffer
     output  := rt.create_kernel_output(&input_data)
-    n_elem  := rt.create_push_constant(&pc_data)
 
-    // kernel_operands: [3]rt.Kernel_Operand = {output, input, weight}
-    kernel_operands: [4]rt.Kernel_Operand = {output, input, weight, n_elem}
-    rt.vulkan_launch_kernel(kernel_operands, spirv_bytecode)
+    layout := rt.Grid_Layout{1, 1, 1}
+    kernel_operands: [3]rt.Kernel_Operand = {output, input, weight}
+    out := rt.vulkan_launch_kernel(kernel_operands, layout, spirv_bytecode)
+    rt.print_results_f32(128, out)
 }
 

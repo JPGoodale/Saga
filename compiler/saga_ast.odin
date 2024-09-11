@@ -13,7 +13,7 @@ AST_Node :: union {
     Scalar_Argument,
     Kernel,
     Expression,
-    Literal,
+    Value,
     Type,
     Scalar_Type,
     Array_Type
@@ -26,9 +26,10 @@ Module :: struct {
 
 
 Layout :: struct {
-    x: string,
-    y: string,
-    z: string,
+    x:          string,
+    y:          string,
+    z:          string,
+    is_grid:    bool
 }
 
 
@@ -88,8 +89,9 @@ Kernel :: struct {
 Expression :: union {
     Variable_Expression,
     Binary_Expression,
+    Conditional_Expression,
     Call_Expression,
-    Literal,
+    Value,
 }
 
 
@@ -101,59 +103,103 @@ Variable_Expression :: struct {
 }
 
 
-Call_Expression :: struct {
-    callee: string,
-    args:   [dynamic]Expression,
-}
-
-
 Binary_Expression :: struct {
     op:  string,
-    lhs: Literal,
-    rhs: Literal,
+    lhs: ^Expression,
+    rhs: ^Expression,
 }
 
 
-Literal :: struct {
+Conditional_Expression :: struct {
+    condition:  ^Expression,
+    body:       [dynamic]Expression
+}
+
+
+Call_Expression :: struct {
+    callee: string,
+    args:   [dynamic]Value,
+}
+
+
+Value :: struct {
     value:          string,
     thread_id:      string,
-    is_identifier:  bool,
+    type:           Type,
 }
 
 
-print_node :: proc(node: AST_Node) {
+print_node :: proc(node: AST_Node, indent: int = 0) {
+    indent_str := strings.repeat(" ", indent)
+    
     #partial switch n in node {
     case Module:
-        fmt.printf("%v\n", n)
+        fmt.printf("%sModule: %s\n", indent_str, n.name)
     case Layout:
-        fmt.printf("%v\n", n)
+        fmt.printf("%sLayout: (%s, %s, %s)\n", indent_str, n.x, n.y, n.z)
     case Constant_Assignment:
-        fmt.printf("%v\n", n)
+        fmt.printf("%sConstant: %s = %s\n", indent_str, n.name, n.value)
     case Kernel:
-        print_node(n.signature)
+        fmt.printf("%sKernel:\n", indent_str)
+        print_node(n.signature, indent + 2)
+        fmt.printf("%sKernel Body:\n", indent_str)
         for expr in n.body {
-            print_node(expr)
+            print_node(expr, indent + 2)
         }
     case Kernel_Signature:
-        fmt.printf("%v\n", n.name)
-        for arg in n.args {
-            print_node(arg)
+        fmt.printf("%sKernel Signature: %s\n", indent_str, n.name)
+        if len(n.args) > 0 {
+            fmt.printf("%s  Arguments (%d):\n", indent_str, len(n.args))
+            for arg in n.args {
+                print_node(arg, indent + 4)
+            }
+        } else {
+            fmt.printf("%s  WARNING: No arguments in kernel signature\n", indent_str)
         }
-    case Array_Argument, Scalar_Argument:
-        fmt.printf("%v\n", n)
+    case Array_Argument:
+        fmt.printf("%sArray Arg: %s %v\n", indent_str, n.name, n.type)
+    case Scalar_Argument:
+        fmt.printf("%sScalar Arg: %s %v\n", indent_str, n.name, n.type)
     case Expression:
         switch e in n {
         case Variable_Expression:
-            fmt.printf("%v\n", e)
-        case Binary_Expression:
-            fmt.printf("%v\n", e)
-        case Call_Expression:
-            for arg in e.args {
-                fmt.printf("%v\n", arg)
+            fmt.printf("%sVariable: %s[%s] %v\n", indent_str, e.name, e.thread_id, e.type)
+            if e.value != nil {
+                fmt.printf("%s  Value:\n", indent_str)
+                print_node(e.value^, indent + 4)
             }
-        case Literal:
-            fmt.printf("%v\n", e)
+        case Binary_Expression:
+            fmt.printf("%sBinary Op: %s\n", indent_str, e.op)
+            fmt.printf("%s  Left:\n", indent_str)
+            print_node(e.lhs^, indent + 4)
+            fmt.printf("%s  Right:\n", indent_str)
+            print_node(e.rhs^, indent + 4)
+        case Conditional_Expression:
+            fmt.printf("%sConditional:\n", indent_str)
+            fmt.printf("%s  Condition:\n", indent_str)
+            print_node(e.condition^, indent + 4)
+            fmt.printf("%s  Body:\n", indent_str)
+            for expr in e.body {
+                print_node(expr, indent + 4)
+            }
+        case Call_Expression:
+            fmt.printf("%sFunction Call: %s\n", indent_str, e.callee)
+            fmt.printf("%s  Arguments:\n", indent_str)
+            for arg in e.args {
+                print_node(arg, indent + 4)
+            }
+        case Value:
+            fmt.printf("%sValue: %s[%s] %v\n", indent_str, e.value, e.thread_id, e.type)
         }
+    case Type:
+        switch t in n {
+        case Scalar_Type:
+            fmt.printf("%sScalar Type: %s\n", indent_str, t.variant)
+        case Array_Type:
+            fmt.printf("%sArray Type: %s[%s]\n", indent_str, t.element_type, t.n_elements)
+        }
+    case:
+        fmt.printf("%sUnknown node type: %v\n", indent_str, n)
     }
 }
 

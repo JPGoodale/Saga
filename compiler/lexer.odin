@@ -41,6 +41,12 @@ Token_Type :: enum {
     Subtraction_Operator,
     Multiplication_Operator,
     Division_Operator,
+    Less_Than_Operator,
+    Less_Than_Or_Equal_To_Operator,
+    Greater_Than_Operator,
+    Greater_Than_Or_Equal_To_Operator,
+    Equals_Operator,
+    Not_Equal_Operator,
 }
 
 
@@ -53,6 +59,15 @@ Token :: struct {
 is_space :: unicode.is_space
 is_alpha :: unicode.is_alpha
 is_digit :: unicode.is_digit
+
+
+is_bool :: proc(r: string) -> bool {
+    switch r {
+    case "true", "false":
+        return true 
+    }
+    return false
+}
 
 
 is_operator :: proc(r: rune) -> bool {
@@ -90,7 +105,7 @@ is_type :: proc(s: string) -> bool {
 
 is_builtin_variable :: proc(s: string) -> bool {
     switch s {
-    case "tid.x", "tid.y", "tid.z", "ctaid.x", "ctaid.y", "ctaid.z", "ntid.x", "ntid.y", "ntid.z":
+    case "thread_idx.x", "tid.y", "tid.z", "ctaid.x", "ctaid.y", "ctaid.z", "ntid.x", "ntid.y", "ntid.z":
         return true
     }
     return false
@@ -169,32 +184,33 @@ split_tokens :: proc(data: []byte, at_eof: bool) -> (advance: int, token: []byte
         return
     }
 
-    for width, i := 0, start; i < len(data); i += width {
-        r, width = utf8.decode_rune(data[i:])
-        if is_space(r) || is_operator(r) || is_delimiter(r) {
-            if r == '(' && i > start {
-                potential_func := string(data[start:i])
-                if is_builtin_function(potential_func) {
-                    paren_count := 1
-                    for j := i + width; j < len(data); j += width {
-                        r, width = utf8.decode_rune(data[j:])
-                        if r == '(' {
-                            paren_count += 1
-                        } else if r == ')' {
-                            paren_count -= 1
-                            if paren_count == 0 {
-                                advance = j + width
-                                token = data[start:j+width]
-                                return
-                            }
-                        }
-                    }
-                }
-            }
-            advance = i
-            token = data[start:i]
+    if is_alpha(r) || r == '_' {
+        end := start + width
+        for end < len(data) {
+            r, w := utf8.decode_rune(data[end:])
+            if !is_alpha(r) && !is_digit(r) && r != '.' && r != '_' do break
+            end += w
+        }
+        if end < len(data) && data[end] == '(' {
+            advance = end
+            token = data[start:end]
             return
         }
+        advance = end
+        token = data[start:end]
+        return
+    }
+
+    if is_digit(r) {
+        end := start + width
+        for end < len(data) {
+            r, w := utf8.decode_rune(data[end:])
+            if !is_digit(r) && r != '.' do break
+            end += w
+        }
+        advance = end
+        token = data[start:end]
+        return
     }
 
     if at_eof && len(data) > start {
@@ -223,7 +239,7 @@ lex :: proc(reader_stream: io.Reader) -> [dynamic]Token {
         // Keywords
         case token_str == "module":
             token = Token {.Module_Keyword, token_str} 
-        case token_str == "layout":
+        case token_str == "BLOCK_LAYOUT", token_str == "GRID_LAYOUT":
             token = Token {.Layout_Keyword, token_str} 
         case token_str == "kernel":
             token = Token {.Kernel_Keyword, token_str} 
@@ -245,6 +261,18 @@ lex :: proc(reader_stream: io.Reader) -> [dynamic]Token {
             token = Token {.Multiplication_Operator, token_str}
         case token_str == "/":
             token = Token {.Division_Operator, token_str}
+        case token_str == "<":
+            token = Token {.Less_Than_Operator, token_str}
+        case token_str == "<=":
+            token = Token {.Less_Than_Or_Equal_To_Operator, token_str}
+        case token_str == ">":
+            token = Token {.Greater_Than_Operator, token_str}
+        case token_str == ">=":
+            token = Token {.Less_Than_Or_Equal_To_Operator, token_str}
+        case token_str == "==":
+            token = Token {.Equals_Operator, token_str}
+        case token_str == "!=":
+            token = Token {.Not_Equal_Operator, token_str}
 
         // Delimiters 
         case token_str == "(":
@@ -266,14 +294,17 @@ lex :: proc(reader_stream: io.Reader) -> [dynamic]Token {
         case token_str == "\n":
             token = Token{.Newline, token_str} 
 
+        case is_builtin_function(token_str): 
+            token = Token{.Function_Call, token_str}
+
         case is_builtin_variable(token_str):
             token = Token {.Builtin_Variable, token_str} 
 
-        case is_builtin_function(strings.split(token_str, "(")[0]): 
-            token = Token{.Function_Call, token_str}
-
         case is_type(token_str):
             token = Token {.Type_Identifier, token_str} 
+
+        case is_bool(token_str):
+            token = Token {.Literal, token_str} 
 
         case is_alpha(token_start):
             token = Token {.Identifier, token_str}

@@ -33,6 +33,18 @@ parser_get_variable_type :: proc(p: ^Parser, name: string) -> (Type, bool) {
 }
 
 
+parser_infer_variable_type :: proc(p: ^Parser, token: Token) -> (type: Type, err: Parsing_Error) {
+    found: bool
+    type, found = parser_get_variable_type(p, token.value)
+    if !found {
+        err = .Syntax_Error
+        log.errorf("Variable %s used before declaration", token.value)
+        return
+    }
+    return
+}
+
+
 parser_peek :: proc(p: ^Parser) -> Token {
     if p.current_token_number >= len(p.token_stream) {
         return Token{type = .EOF, value = ""}
@@ -85,8 +97,12 @@ parse_module_header :: proc(p: ^Parser) -> (node: Module, err: Parsing_Error) {
 }
 
 // TODO: roll up this loop + assert that literal is numeric
-parse_layout :: proc(p: ^Parser) -> (node: Layout, err: Parsing_Error) {
+parse_layout :: proc(p: ^Parser, is_grid: bool = false) -> (node: Layout, err: Parsing_Error) {
     next_token := parser_advance(p)
+    expect_token_type(next_token, .Constant_Assignment_Operator)
+    if err != nil do return
+
+    next_token = parser_advance(p)
     expect_token_type(next_token, .Open_Bracket)
     if err != nil do return
 
@@ -138,6 +154,7 @@ parse_layout :: proc(p: ^Parser) -> (node: Layout, err: Parsing_Error) {
     expect_token_type(next_token, .Close_Bracket)
     if err != nil do return
 
+    node.is_grid = is_grid
     return
 }
 
@@ -206,7 +223,7 @@ parse_kernel_args :: proc(p: ^Parser) -> (args: [dynamic]Argument, err: Parsing_
         arg_type, err := parse_type(p, arg_type_token)
         if err != nil do return
         
-        switch type in arg_type {
+        #partial switch type in arg_type {
         case Array_Type:
             arg_node := Array_Argument{arg_name_token.value, type}
             append(&args, arg_node)
@@ -226,55 +243,99 @@ parse_kernel_args :: proc(p: ^Parser) -> (args: [dynamic]Argument, err: Parsing_
 }
 
 
-parse_array_index :: proc(p: ^Parser) -> (index: string) {
-    parser_advance(p)
+parse_array_index :: proc(p: ^Parser) -> (index: string, err: Parsing_Error) {
+    // parser_advance(p)
     index = parser_advance(p).value
-    parser_advance(p)
+    next_token := parser_advance(p)
+    err = expect_token_type(next_token, .Close_Bracket) // Need to handle cases like tid.x + 16
     return
 }
 
 
-parse_literal :: proc(p: ^Parser) -> (node: Literal, err: Parsing_Error) {
-    token := parser_advance(p)
+parse_value :: proc(p: ^Parser, token: Token) -> (node: Value, err: Parsing_Error) {
     #partial switch token.type {
-    case .Identifier:
-        if parser_peek(p).type == .Open_Bracket {
-            thread_index := parse_array_index(p)
-            node = Literal{token.value, thread_index, true}
-        } 
-        else { 
-            node = Literal{token.value, "", true} 
-        }
+    // TODO: Add Literal type parsing
     case .Literal:
-        node = Literal{token.value, "", false}
+        node = Value{token.value, "", nil}
+        return
+    case .Builtin_Variable:
+        node = Value{token.value, "", nil}
+        return
+    case .Identifier:
+        thread_index: string
+        if parser_peek(p).type == .Open_Bracket {
+            parser_advance(p)
+            thread_index, err = parse_array_index(p)
+            if err != nil do return
+        }
+        else { thread_index =  "" }
+        type, err := parser_infer_variable_type(p, token)
+        if err != nil do return
+        node = Value{token.value, thread_index, type}
+        return
     case:
+        log.errorf("Unexpected token: %v", token)
         err = .Syntax_Error
-        log.errorf("Expected literal or identifier, got %v", token.type)
+        return
     }
-    return
 }
 
 
-parse_expression :: proc(p: ^Parser) -> (node: Expression, err: Parsing_Error) {
-    lhs: Literal
-    lhs, err = parse_literal(p)
-    if err != nil do return
+operator_precedence :: proc(op: string) -> int {
+    switch op {
+    case "+", "-":
+        return 1
+    case "*", "/":
+        return 2
+    case:
+        return 0
+    }
+}
 
-    operator_token := parser_peek(p)
-    #partial switch operator_token.type {
+
+parse_expression :: proc(p: ^Parser, prev_expr: Expression = nil, prev_op_token: Token = Token{}) -> (node: Expression, err: Parsing_Error) {
+    lhs: Expression
+    next_token := parser_advance(p)
+
+    if next_token.type == .Function_Call {
+        _next_token := parser_advance(p)
+        err = expect_token_type(_next_token, .Open_Parenthese)
+        if err != nil do return
+        function_args: [dynamic]Value
+        for {
+            _next_token = parser_advance(p)
+            if _next_token.type == .Close_Parenthese do break
+            arg, err := parse_value(p, _next_token)
+            append(&function_args, arg)
+        }
+        lhs = Call_Expression{next_token.value, function_args}
+    }
+    else {
+        lhs, err = parse_value(p, next_token)
+        if err != nil do return
+    }
+
+    op_token := parser_peek(p)
+    #partial switch op_token.type {
     case .Addition_Operator, .Subtraction_Operator, .Multiplication_Operator, .Division_Operator:
         parser_advance(p)
-        rhs: Literal
-        rhs, err = parse_literal(p)
+        rhs: Expression
+        rhs, err = parse_expression(p)
         if err != nil do return
-        node = Binary_Expression{operator_token.value, lhs, rhs}
+        #partial switch expr in rhs {
+        case Binary_Expression:
+            if operator_precedence(expr.op) < operator_precedence(op_token.value) {
+                lhs : Expression = Binary_Expression{op_token.value, new_clone(lhs), expr.lhs}
+                rhs := expr.rhs
+                node = Binary_Expression{expr.op, new_clone(lhs), rhs}
+                return
+            }
+        }
+        node = Binary_Expression{op_token.value, new_clone(lhs), new_clone(rhs)}
         return
-    case .Literal:
+    // TODO: Add Literal type parsing
+    case .Literal, .Newline:
         node = lhs
-        return
-    case .Function_Call:
-        log.errorf("TODO: Implement parsing for %v", operator_token.type)
-        err = .Unimplemented_Error
         return
     case:
         log.errorf("Invalid expression.") 
@@ -284,23 +345,27 @@ parse_expression :: proc(p: ^Parser) -> (node: Expression, err: Parsing_Error) {
 }
 
 
+
 parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expression, err: Parsing_Error) {
     next_token := parser_advance(p)
     #partial switch next_token.type {
     case .Open_Bracket:
-        thread_index := parser_advance(p).value
-        parser_advance(p)
-        parser_advance(p)
-        inferred_type, found := parser_get_variable_type(p, name_token.value)
-        if !found {
-            err = .Syntax_Error
-            log.errorf("Variable %s used before declaration", name_token.value)
-            return
-        }
+        thread_index, err := parse_array_index(p)
+        if err != nil do return
+
+        next_token = parser_advance(p)
+        err = expect_token_type(next_token, .Variable_Assignment_Operator)
+        if err != nil do return
+
+        type: Type
+        type, err = parser_infer_variable_type(p, name_token)
+        if err != nil do return
+
         value: Expression
         value, err = parse_expression(p)
         if err != nil do return
-        node = Variable_Expression{name_token.value, thread_index, inferred_type, new_clone(value)}
+
+        node = Variable_Expression{name_token.value, thread_index, type, new_clone(value)}
         return
     case .Colon:
         type_token := parser_advance(p)
@@ -321,17 +386,15 @@ parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expre
         parser_capture_variable(p, name_token.value, type)
         return
     case .Variable_Assignment_Operator:
-        inferred_type, found := parser_get_variable_type(p, name_token.value)
-        if !found {
-            err = .Syntax_Error
-            log.errorf("Variable %s used before declaration", name_token.value)
-            return
-        }
+        type: Type
+        type, err = parser_infer_variable_type(p, name_token)
+        if err != nil do return
+
         value: Expression
         value, err = parse_expression(p)
         if err != nil do return
 
-        node = Variable_Expression{name_token.value, "", inferred_type, new_clone(value)}
+        node = Variable_Expression{name_token.value, "", type, new_clone(value)}
         return
     case .Constant_Assignment_Operator:
         log.errorf("All constants must be declared outside of kernel.") 
@@ -342,6 +405,61 @@ parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expre
         err = .Syntax_Error
         return
     }
+}
+
+
+parse_conditional_expression :: proc(p: ^Parser, keyword_token: Token) -> (node: Conditional_Expression, err: Parsing_Error) {
+    condition_tokens: [dynamic]Token
+    for {
+        token := parser_advance(p)
+        if token.type == .Open_Brace do break
+        append(&condition_tokens, token)
+    }
+    switch len(condition_tokens) {
+    case 1:
+        condition_value, err := parse_value(p, condition_tokens[0])
+        condition: Expression = condition_value
+        node.condition = new_clone(condition)
+    case 3:
+        lhs: Expression
+        rhs: Expression
+        lhs, err = parse_value(p, condition_tokens[0])
+        rhs, err = parse_value(p, condition_tokens[2])
+        operator := condition_tokens[1].value
+        condition: Expression = Binary_Expression{operator, new_clone(lhs), new_clone(rhs)}
+        node.condition = new_clone(condition)
+    case:
+        log.errorf("Invalid conditional expression.. for now...") 
+    }
+    node.body, err = parse_block(p)
+    return
+}
+
+
+parse_block :: proc(p: ^Parser) -> (body: [dynamic]Expression, err: Parsing_Error){
+    for {
+        next_token := parser_scan(p)
+        if next_token.type == .Close_Brace do break
+        #partial switch next_token.type {
+        case .Identifier: 
+            subnode: Expression
+            subnode, err = parse_variable_expression(p, next_token)
+            append(&body, subnode)
+        case .Conditional_Keyword: 
+            subnode: Expression
+            subnode, err = parse_conditional_expression(p, next_token)
+            append(&body, subnode)
+        case .For_Keyword: 
+            log.errorf("TODO: Implement parsing for %v", next_token.type)
+            err = .Unimplemented_Error
+            return
+        case:
+            log.errorf("Unexpected token: %v", next_token)
+            err = .Syntax_Error
+            return
+        }
+    }
+    return
 }
 
 
@@ -356,6 +474,14 @@ parse :: proc(token_stream: [dynamic]Token) -> (ast: [dynamic]AST_Node, err: Par
     if err != nil do return
     append(&ast, node)
 
+    // Grid Layout
+    next_token = parser_scan(&p)
+    err = expect_token_type(next_token, .Layout_Keyword)
+    node, err = parse_layout(&p, true)
+    if err != nil do return
+    append(&ast, node)
+
+    // Block Layout
     next_token = parser_scan(&p)
     err = expect_token_type(next_token, .Layout_Keyword)
     node, err = parse_layout(&p)
@@ -391,9 +517,9 @@ parse :: proc(token_stream: [dynamic]Token) -> (ast: [dynamic]AST_Node, err: Par
                 subnode, err = parse_variable_expression(&p, next_token)
                 append(&body, subnode)
             case .Conditional_Keyword: 
-                log.errorf("TODO: Implement parsing for %v", next_token.type)
-                err = .Unimplemented_Error
-                return
+                subnode: Expression
+                subnode, err = parse_conditional_expression(&p, next_token)
+                append(&body, subnode)
             case .For_Keyword: 
                 log.errorf("TODO: Implement parsing for %v", next_token.type)
                 err = .Unimplemented_Error

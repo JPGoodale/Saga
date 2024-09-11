@@ -15,6 +15,7 @@ Ctx :: struct {
     kernel_body_label:      OpLabel,
     kernel_return:          OpReturn, // Here just for pedantic purposes
     kernel_function_end:    OpFunctionEnd, // ^ What he said..
+    extensions:             [dynamic]OpExtInstImport,
     annotations:            [dynamic]OpAnnotation,
     scalar_types:           [dynamic]OpType,
     types:                  [dynamic]OpType,
@@ -24,7 +25,7 @@ Ctx :: struct {
     stores:                 [dynamic]OpStore,
     composites:             [dynamic]OpComposite,
     access_chains:          [dynamic]OpAccessChain,
-    binary_ops:             [dynamic]OpBinaryExpr,
+    operations:             [dynamic]Operation,
     arg_name_ids:           [dynamic]Id,
     storage_buffer_ids:     [dynamic]Id,
     arg_scalar_type_map:    map[Id]string,
@@ -57,6 +58,14 @@ set_capability :: proc(ctx: ^Ctx) {
 }
 
 
+set_extensions :: proc(ctx: ^Ctx) {
+    glsl_entension          : OpExtInstImport
+    glsl_entension.name     = "GLSL.std.450"
+    glsl_entension.result   = auto_cast("%glsl")
+    append(&ctx.extensions, glsl_entension)
+}
+
+
 set_memory_model :: proc(ctx: ^Ctx) {
     memory_model                    : OpMemoryModel
     memory_model.addressing_model   = .Logical
@@ -67,12 +76,15 @@ set_memory_model :: proc(ctx: ^Ctx) {
 
 translate_module :: proc(ctx: ^Ctx, node: Module) {
     set_capability(ctx)
+    set_extensions(ctx)
     set_memory_model(ctx)
     ctx.module_name = node.name
 }
 
 
 translate_layout :: proc(ctx: ^Ctx, node: Layout) {
+    if node.is_grid do return
+
     execution_mode                  : OpExecutionMode
     execution_mode.mode             = .LocalSize
     execution_mode.mode_operands    = {node.x, node.y, node.z}
@@ -86,40 +98,40 @@ translate_layout :: proc(ctx: ^Ctx, node: Layout) {
     append(&ctx.annotations, decorate)
 
     uint                            : OpTypeInt
-    uint.result                     = auto_cast("%uint")
+    uint.result                     = auto_cast("%uint32")
     uint.width                      = 32
     uint.signedness                 = 0
     append(&ctx.scalar_types, uint)
     ctx.scalar_type_map["u32"] = "%uint"
 
     uint_vec3                       : OpTypeVector
-    uint_vec3.result                = auto_cast("%v3uint")
-    uint_vec3.component_type        = auto_cast("%uint")
+    uint_vec3.result                = auto_cast("%v3uint32")
+    uint_vec3.component_type        = auto_cast("%uint32")
     uint_vec3.component_count       = 3
     append(&ctx.types, uint_vec3)
 
     uint_vec3_ptr                   : OpTypePointer
-    uint_vec3_ptr.result            = auto_cast("%_ptr_Input_v3uint")
-    uint_vec3_ptr.type              = auto_cast("%v3uint")
+    uint_vec3_ptr.result            = auto_cast("%_ptr_Input_v3uint32")
+    uint_vec3_ptr.type              = auto_cast("%v3uint32")
     uint_vec3_ptr.storage_class     = .Input
     append(&ctx.types, uint_vec3_ptr)
 
     variable                        : OpVariable
     variable.result                 = auto_cast("%gl_GlobalInvocationID")
-    variable.result_type            = auto_cast("%_ptr_Input_v3uint")
+    variable.result_type            = auto_cast("%_ptr_Input_v3uint32")
     variable.storage_class          = .Input
     append(&ctx.variables, variable)
 
     constant                        : OpConstant
     constant.result                 = auto_cast("%zeroth_thread_id")
-    constant.result_type            = auto_cast("%uint")
+    constant.result_type            = auto_cast("%uint32")
     constant.value                  = u64(0)
     append(&ctx.constants, constant)
     ctx.zeroth_thread_id = auto_cast(constant.result)
 
     load                            : OpLoad
     load.result                     = auto_cast("%layout_ptr")
-    load.result_type                = auto_cast("%v3uint")
+    load.result_type                = auto_cast("%v3uint32")
     load.pointer                    = auto_cast("%gl_GlobalInvocationID")
     append(&ctx.loads, load)
 }
@@ -231,7 +243,7 @@ translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]Argument) {
             variable.storage_class              = .PushConstant
             append(&ctx.variables, variable)
 
-            pointer.result                      = create_result_id({"%_ptr_", type_name, "_push_constant"})
+            pointer.result                      = create_result_id({"%_ptr_push_constant", type_name})
             pointer.storage_class               = .PushConstant
             pointer.type                        = create_id({"%", type_name})
             append(&ctx.types, pointer)
@@ -307,8 +319,8 @@ translate_array_type :: proc(ctx: ^Ctx, node: Array_Type, element_type_name: str
             return 
         }
         constant                                    : OpConstant
-        constant.result                             = create_result_id({"%uint_", node.n_elements})
-        constant.result_type                        = auto_cast("%uint")
+        constant.result                             = create_result_id({"%uint32_", node.n_elements})
+        constant.result_type                        = auto_cast("%uint32")
         constant.value                              = strconv.atoi(node.n_elements)
         append(&ctx.constants, constant)
 
@@ -369,7 +381,7 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
             append(&ctx.scalar_types, type)
         case "i8": 
             type            : OpTypeInt
-            type.result     = create_result_id({"%", "int"})
+            type.result     = create_result_id({"%", "int8"})
             type.width      = 8
             type.signedness = 1
             type_name       = auto_cast(type.result[1:])
@@ -377,7 +389,7 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
             append(&ctx.scalar_types, type)
         case "i16": 
             type            : OpTypeInt
-            type.result     = create_result_id({"%", "int"})
+            type.result     = create_result_id({"%", "int16"})
             type.width      = 16
             type.signedness = 1
             type_name       = auto_cast(type.result[1:])
@@ -385,7 +397,7 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
             append(&ctx.scalar_types, type)
         case "i32": 
             type            : OpTypeInt
-            type.result     = create_result_id({"%", "int"})
+            type.result     = create_result_id({"%", "int32"})
             type.width      = 32
             type.signedness = 1
             type_name       = auto_cast(type.result[1:])
@@ -393,7 +405,7 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
             append(&ctx.scalar_types, type)
         case "i64": 
             type            : OpTypeInt
-            type.result     = create_result_id({"%", "int"})
+            type.result     = create_result_id({"%", "int64"})
             type.width      = 64
             type.signedness = 1
             type_name       = auto_cast(type.result[1:])
@@ -401,7 +413,7 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
             append(&ctx.scalar_types, type)
         case "u8": 
             type            : OpTypeInt
-            type.result     = create_result_id({"%", "uint"})
+            type.result     = create_result_id({"%", "uint8"})
             type.width      = 8
             type.signedness = 0
             type_name       = auto_cast(type.result[1:])
@@ -409,7 +421,7 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
             append(&ctx.scalar_types, type)
         case "u16": 
             type            : OpTypeInt
-            type.result     = create_result_id({"%", "uint"})
+            type.result     = create_result_id({"%", "uint16"})
             type.width      = 16
             type.signedness = 0
             type_name       = auto_cast(type.result[1:])
@@ -417,7 +429,7 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
             append(&ctx.scalar_types, type)
         case "u32": 
             type            : OpTypeInt
-            type.result     = create_result_id({"%", "uint"})
+            type.result     = create_result_id({"%", "uint32"})
             type.width      = 32
             type.signedness = 0
             type_name       = auto_cast(type.result[1:])
@@ -425,7 +437,7 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
             append(&ctx.scalar_types, type)
         case "u64": 
             type            : OpTypeInt
-            type.result     = create_result_id({"%", "uint"})
+            type.result     = create_result_id({"%", "uint64"})
             type.width      = 64
             type.signedness = 0
             type_name       = auto_cast(type.result[1:])
@@ -434,28 +446,28 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
         // Not handling FP Encoding for OpTypeFloat quite yet
         case "f16": 
             type            : OpTypeFloat
-            type.result     = create_result_id({"%", "float"})
+            type.result     = create_result_id({"%", "float16"})
             type.width      = 16
             type_name       = auto_cast(type.result[1:])
             ctx.scalar_type_map[t] = auto_cast(type.result)
             append(&ctx.scalar_types, type)
         case "f32": 
             type            : OpTypeFloat
-            type.result     = create_result_id({"%", "float"})
+            type.result     = create_result_id({"%", "float32"})
             type.width      = 32
             type_name       = auto_cast(type.result[1:])
             ctx.scalar_type_map[t] = auto_cast(type.result)
             append(&ctx.scalar_types, type)
         case "f64": 
             type            : OpTypeFloat
-            type.result     = create_result_id({"%", "float"})
+            type.result     = create_result_id({"%", "float64"})
             type.width      = 64
             type_name       = auto_cast(type.result[1:])
             ctx.scalar_type_map[t] = auto_cast(type.result)
             append(&ctx.scalar_types, type)
         case "f128": 
             type            : OpTypeFloat
-            type.result     = create_result_id({"%", "float"})
+            type.result     = create_result_id({"%", "float128"})
             type.width      = 128
             type_name       = auto_cast(type.result[1:])
             ctx.scalar_type_map[t] = auto_cast(type.result)
@@ -477,35 +489,91 @@ translate_kernel_body :: proc(ctx: ^Ctx, nodes: [dynamic]Expression) {
             #partial switch e in n.value {
             case Binary_Expression:
                 translate_binary_op(ctx, n, e) 
+            case Call_Expression:
+                translate_call_expression(ctx, n, e)
             case:
                 fmt.println(n)
-                log.error("I'm afraid only binary expressions are supported at this time.. a pity, tisn't it?")
+                log.error("I'm afraid only binary expressions and call expressions are supported at this time.. a pity, tisn't it?")
             }
+        case Conditional_Expression:
+            // translate_conditional_expression(ctx, n)
         case:
             fmt.println(n)
-            log.error("I'm afraid only variable expressions are supported at this time.. a pity, tisn't it?")
+            log.error("I'm afraid only variable and conditional expressions are supported at this time.. a pity, tisn't it?")
         }
     }
 }
 
+
+translate_conditional_expression :: proc(ctx: ^Ctx, node: Conditional_Expression) {
+    
+}
+
+
 // Only works on kernel args as of now
-translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: Binary_Expression) {
-    lhs_id              := create_id({"%", op_node.lhs.value})
-    rhs_id              := create_id({"%", op_node.rhs.value})
+translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: Binary_Expression, is_subexpr: bool = false) -> (result_id: Id) {
+    // -----------------------------------------------------------------------------------
+    // Left-Hand-Side
 
-    lhs_max_thread_id   := translate_thread_id(ctx, op_node.lhs.thread_id)
-    rhs_max_thread_id   := translate_thread_id(ctx, op_node.rhs.thread_id)
+    lhs_node: Value
+    lhs_load_id: Id
+    lhs_load: OpLoad
 
-    lhs_element_type    := ctx.arg_scalar_type_map[lhs_id]
-    rhs_element_type    := ctx.arg_scalar_type_map[rhs_id]
-    assert(lhs_element_type == rhs_element_type)
+    #partial switch node in op_node.lhs^ {
+    case Value:
+        lhs_node = node
+    case Call_Expression: // Only supports unary ops as of now
+        lhs_node = node.args[0]
+    case Binary_Expression:
+        lhs_load_id = translate_binary_op(ctx, root_node, node, true)
+    case:
+        log.error("I'm afraid this is not supported at this time.. a pity, tisn't it?")
+    }
 
-    lhs_access_chain                : OpAccessChain
-    lhs_access_chain.result         = create_result_id({string(lhs_id), "_access_chain"})
-    lhs_access_chain.result_type    = auto_cast(ctx.register_ptr_map[lhs_element_type])
-    lhs_access_chain.base           = lhs_id
-    lhs_access_chain.indexes        = {ctx.zeroth_thread_id, lhs_max_thread_id}
-    append(&ctx.access_chains, lhs_access_chain)
+    // if is_subexpr {
+        lhs_id                          := create_id({"%", lhs_node.value})
+        lhs_max_thread_id               := translate_thread_id(ctx, lhs_node.thread_id)
+        lhs_element_type                := ctx.arg_scalar_type_map[lhs_id]
+
+        lhs_access_chain                : OpAccessChain
+        lhs_access_chain.result         = create_result_id({string(lhs_id), "_access_chain"})
+        lhs_access_chain.result_type    = auto_cast(ctx.register_ptr_map[lhs_element_type])
+        lhs_access_chain.base           = lhs_id
+        lhs_access_chain.indexes        = {ctx.zeroth_thread_id, lhs_max_thread_id}
+        append(&ctx.access_chains, lhs_access_chain)
+
+        // lhs_load                        : OpLoad
+        lhs_load.result                 = create_result_id({string(lhs_id), "_register"})
+        lhs_load.result_type            = create_id({"%", lhs_element_type})
+        lhs_load.pointer                = auto_cast(lhs_access_chain.result)
+        append(&ctx.loads, lhs_load)
+
+        lhs_load_id = auto_cast(lhs_load.result)
+
+        #partial switch node in op_node.lhs^ {
+        case Call_Expression:
+            lhs_load_id = _translate_call_expression(ctx, node, lhs_element_type, lhs_load_id)
+        }
+    // }
+
+    // -----------------------------------------------------------------------------------
+    // Right-Hand-Side
+
+    rhs_node: Value
+
+    #partial switch node in op_node.rhs^ {
+    case Value:
+        rhs_node = node
+    case Call_Expression: // Only supports unary ops as of now
+        rhs_node = node.args[0]
+    case:
+        log.error("I'm afraid this is not supported at this time.. a pity, tisn't it?")
+    }
+
+    rhs_id                          := create_id({"%", rhs_node.value})
+    rhs_max_thread_id               := translate_thread_id(ctx, rhs_node.thread_id)
+    rhs_element_type                := ctx.arg_scalar_type_map[rhs_id]
+    // assert(lhs_element_type == rhs_element_type)
 
     rhs_access_chain                : OpAccessChain
     rhs_access_chain.result         = create_result_id({string(rhs_id), "_access_chain"})
@@ -514,25 +582,26 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
     rhs_access_chain.indexes        = {ctx.zeroth_thread_id, rhs_max_thread_id}
     append(&ctx.access_chains, rhs_access_chain)
 
-    lhs_load                        : OpLoad
-    lhs_load.result                 = auto_cast("%lhs_register")
-    lhs_load.result_type            = create_id({"%", lhs_element_type})
-    lhs_load.pointer                = auto_cast(lhs_access_chain.result)
-    append(&ctx.loads, lhs_load)
-
     rhs_load                        : OpLoad
-    rhs_load.result                 = auto_cast("%rhs_register")
+    rhs_load.result                 = create_result_id({string(rhs_id), "_register"})
     rhs_load.result_type            = create_id({"%", rhs_element_type})
     rhs_load.pointer                = auto_cast(rhs_access_chain.result)
     append(&ctx.loads, rhs_load)
 
-    lhs_load_id: Id = auto_cast(lhs_load.result)
     rhs_load_id: Id = auto_cast(rhs_load.result)
 
+    #partial switch node in op_node.rhs^ {
+    case Call_Expression:
+        rhs_load_id = _translate_call_expression(ctx, node, rhs_element_type, rhs_load_id)
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Operation
+
     result: Result_Id
-    type := string(lhs_load.result_type)
+    type := string(rhs_load.result_type)
     switch type {
-    case "%int":
+    case "%int8", "%int16", "%int32", "%int64":
         switch op_node.op {
         case "+":
             op: OpIAdd
@@ -540,7 +609,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "-":
             op: OpISub
@@ -548,7 +617,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "*":
             op: OpIMul
@@ -556,7 +625,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "/":
             op: OpSDiv
@@ -564,11 +633,11 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         }
 
-    case "%uint":
+    case "%uint8", "%uint16", "%uint32", "%uint64":
         switch op_node.op {
         case "+":
             op: OpIAdd
@@ -576,7 +645,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "-":
             op: OpISub
@@ -584,7 +653,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "*":
             op: OpIMul
@@ -592,7 +661,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "/":
             op: OpUDiv
@@ -600,10 +669,10 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         }
-    case "%float":
+    case "%float16", "%float32", "%float64", "float128":
         switch op_node.op {
         case "+":
             op: OpFAdd
@@ -611,7 +680,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "-":
             op: OpFSub
@@ -619,7 +688,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "*":
             op: OpFMul
@@ -627,7 +696,7 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         case "/":
             op: OpFDiv
@@ -635,27 +704,37 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
             op.result_type = auto_cast(type)
             op.operand_1 = lhs_load_id
             op.operand_2 = rhs_load_id
-            append(&ctx.binary_ops, op)
+            append(&ctx.operations, op)
             result = op.result
         }
     }
 
-    result_name_id                  := create_id({"%", root_node.name})
-    result_max_thread_id            := translate_thread_id(ctx, root_node.thread_id)
-    result_element_type             := ctx.arg_scalar_type_map[result_name_id]
+    // -----------------------------------------------------------------------------------
+    // Result
 
-    result_access_chain             : OpAccessChain
-    result_access_chain.result      = create_result_id({string(result_name_id), "_access_chain"})
-    result_access_chain.result_type = auto_cast(ctx.register_ptr_map[result_element_type])
-    result_access_chain.base        = result_name_id
-    result_access_chain.indexes     = {ctx.zeroth_thread_id, result_max_thread_id}
-    append(&ctx.access_chains, result_access_chain)
-    
-    store: OpStore
-    store.pointer = auto_cast(result_access_chain.result)
-    store.object = auto_cast(result)
-    append(&ctx.stores, store)
+    if !(is_subexpr) {
+        result_name_id                  := create_id({"%", root_node.name})
+        result_max_thread_id            := translate_thread_id(ctx, root_node.thread_id)
+        result_element_type             := ctx.arg_scalar_type_map[result_name_id]
+
+        result_access_chain             : OpAccessChain
+        result_access_chain.result      = create_result_id({string(result_name_id), "_access_chain"})
+        result_access_chain.result_type = auto_cast(ctx.register_ptr_map[result_element_type])
+        result_access_chain.base        = result_name_id
+        result_access_chain.indexes     = {ctx.zeroth_thread_id, result_max_thread_id}
+        append(&ctx.access_chains, result_access_chain)
+        
+        store: OpStore
+        store.pointer = auto_cast(result_access_chain.result)
+        store.object = auto_cast(result)
+        append(&ctx.stores, store)
+    }
+    else {
+       return auto_cast(result)
+    }
+    return
 }
+
 
 // TODO: Handle more cases
 translate_thread_id :: proc(ctx: ^Ctx, thread_id: string) -> (max_thread_id: Id){
@@ -664,35 +743,108 @@ translate_thread_id :: proc(ctx: ^Ctx, thread_id: string) -> (max_thread_id: Id)
         return
     }
     switch thread_id {
-    case "tid.x":
+    case "thread_idx.x":
         composite_extract               : OpCompositeExtract
         composite_extract.result        = auto_cast("%max_thread_id_x")
-        composite_extract.result_type   = auto_cast("%uint")
+        composite_extract.result_type   = auto_cast("%uint32")
         composite_extract.composite     = auto_cast("%layout_ptr")
         composite_extract.indexes       = {0}
         max_thread_id = auto_cast(composite_extract.result)
-        ctx.thread_id_map["tid.x"] = auto_cast(composite_extract.result)
+        ctx.thread_id_map["thread_idx.x"] = auto_cast(composite_extract.result)
         append(&ctx.composites, composite_extract)
-    case "tid.y":
+    case "thread_idx.y":
         composite_extract               : OpCompositeExtract
         composite_extract.result        = auto_cast("%max_thread_id_y")
-        composite_extract.result_type   = auto_cast("%uint")
+        composite_extract.result_type   = auto_cast("%uint32")
         composite_extract.composite     = auto_cast("%layout_ptr")
         composite_extract.indexes       = {1}
         max_thread_id = auto_cast(composite_extract.result)
-        ctx.thread_id_map["tid.y"] = auto_cast(composite_extract.result)
+        ctx.thread_id_map["thread_idx.y"] = auto_cast(composite_extract.result)
         append(&ctx.composites, composite_extract)
-    case "tid.z":
+    case "thread_idx.z":
         composite_extract               : OpCompositeExtract
         composite_extract.result        = auto_cast("%max_thread_id_z")
-        composite_extract.result_type   = auto_cast("%uint")
+        composite_extract.result_type   = auto_cast("%uint32")
         composite_extract.composite     = auto_cast("%layout_ptr")
         composite_extract.indexes       = {2}
         max_thread_id = auto_cast(composite_extract.result)
-        ctx.thread_id_map["tid.z"] = auto_cast(composite_extract.result)
+        ctx.thread_id_map["thread_idx.z"] = auto_cast(composite_extract.result)
         append(&ctx.composites, composite_extract)
     }
     return
+}
+
+
+// Only works on kernel args as of now
+translate_call_expression :: proc(ctx: ^Ctx, root_node: Variable_Expression, expr_node: Call_Expression) {
+    switch expr_node.callee {
+    case "exp":
+        operand_node            := expr_node.args[0]
+        operand_id              := create_id({"%", operand_node.value})
+        operand_max_thread_id   := translate_thread_id(ctx, operand_node.thread_id)
+        operand_element_type    := ctx.arg_scalar_type_map[operand_id]
+
+        operand_access_chain                : OpAccessChain
+        operand_access_chain.result         = create_result_id({string(operand_id), "_access_chain"})
+        operand_access_chain.result_type    = auto_cast(ctx.register_ptr_map[operand_element_type])
+        operand_access_chain.base           = operand_id
+        operand_access_chain.indexes        = {ctx.zeroth_thread_id, operand_max_thread_id}
+        append(&ctx.access_chains, operand_access_chain)
+
+        operand_load                        : OpLoad
+        operand_load.result                 = auto_cast("%operand_register")
+        operand_load.result_type            = create_id({"%", operand_element_type})
+        operand_load.pointer                = auto_cast(operand_access_chain.result)
+        append(&ctx.loads, operand_load)
+
+        operand_load_id: Id = auto_cast(operand_load.result)
+
+        function: OpExtInst
+        function.result = auto_cast("%exp") // Might give it a name which includes the operand name, like exp_of_x
+        function.result_type = create_id({"%", string(operand_element_type)})
+        function.Instruction = .Exp
+        function.Set = auto_cast(ctx.extensions[0].result) // GLSL will always be the first extension imported (for now lol)
+        function.operands = {operand_load_id}
+        append(&ctx.operations, function)
+
+        result_name_id                  := create_id({"%", root_node.name})
+        result_max_thread_id            := translate_thread_id(ctx, root_node.thread_id)
+        result_element_type             := ctx.arg_scalar_type_map[result_name_id]
+
+        result_access_chain             : OpAccessChain
+        result_access_chain.result      = create_result_id({string(result_name_id), "_access_chain"})
+        result_access_chain.result_type = auto_cast(ctx.register_ptr_map[result_element_type])
+        result_access_chain.base        = result_name_id
+        result_access_chain.indexes     = {ctx.zeroth_thread_id, result_max_thread_id}
+        append(&ctx.access_chains, result_access_chain)
+        
+        store: OpStore
+        store.pointer = auto_cast(result_access_chain.result)
+        store.object = auto_cast(function.result)
+        append(&ctx.stores, store)
+        
+    case:
+        log.error("I'm afraid that this function is not supported at this time.. a pity, tisn't it?")
+    }
+}
+
+
+_translate_call_expression :: proc(ctx: ^Ctx, node: Call_Expression, operand_element_type: string, operand_load_id: Id) -> (result_id: Id) {
+    switch node.callee {
+    case "exp":
+        function: OpExtInst
+        function.result = auto_cast("%exp")
+        function.result_type = create_id({"%", string(operand_element_type)})
+        function.Instruction = .Exp
+        function.Set = auto_cast(ctx.extensions[0].result)
+        function.operands = {operand_load_id}
+        append(&ctx.operations, function)
+        result_id = auto_cast(function.result)
+        return
+    case:
+        log.error("I'm afraid that this function is not supported at this time.. a pity, tisn't it?")
+        return
+    }
 }
 
 
@@ -719,6 +871,8 @@ walk_ast :: proc(ast: [dynamic]AST_Node) {
     fmt.printf("%v\n", ctx.entry_point)
     fmt.printf("%v\n", ctx.execution_mode)
     fmt.println()
+    for extension in ctx.extensions do fmt.printf("%v\n", extension)
+    fmt.println()
     for annotaton in ctx.annotations do fmt.printf("%v\n", annotaton)
     fmt.println()
     for type in ctx.types do fmt.printf("%v\n", type)
@@ -739,7 +893,7 @@ walk_ast :: proc(ast: [dynamic]AST_Node) {
     fmt.println()
     for load in ctx.loads[1:] do fmt.printf("%v\n", load)
     fmt.println()
-    for op in ctx.binary_ops do fmt.printf("%v\n", op)
+    for op in ctx.operations do fmt.printf("%v\n", op)
     fmt.println()
     for store in ctx.stores do fmt.printf("%v\n", store)
     fmt.println()

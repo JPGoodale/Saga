@@ -209,6 +209,24 @@ vulkan_create_physical_device :: proc(ctx: ^Vulkan_Context) {
 
             max_workgroup_count := device_limits.maxComputeWorkGroupCount
             fmt.printf("Max Compute WorkGroup Count %v KB\n", max_workgroup_count)
+
+
+            subgroup_properties := vk.PhysicalDeviceSubgroupProperties{
+                sType = .PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,
+                pNext = nil,
+            }
+
+            properties2 := vk.PhysicalDeviceProperties2{
+                sType = .PHYSICAL_DEVICE_PROPERTIES_2,
+                pNext = &subgroup_properties,
+            }
+
+            vk.GetPhysicalDeviceProperties2(device, &properties2)
+
+            fmt.printf("Subgroup Size: %d\n", subgroup_properties.subgroupSize)
+            fmt.printf("Supported Stages: %v\n", subgroup_properties.supportedStages)
+            fmt.printf("Supported Operations: %v\n", subgroup_properties.supportedOperations)
+            fmt.printf("Quad Operations In All Stages: %v\n", subgroup_properties.quadOperationsInAllStages)
         }
     }
 
@@ -242,13 +260,14 @@ vulkan_create_logical_device :: proc(ctx: ^Vulkan_Context) {
     device_create_info := vk.DeviceCreateInfo {
         sType                   = .DEVICE_CREATE_INFO,
         queueCreateInfoCount    = 1,
-        pQueueCreateInfos       = &device_queue_create_info
+        pQueueCreateInfos       = &device_queue_create_info,
+        ppEnabledExtensionNames = raw_data([]cstring{"VK_KHR_shader_subgroup_arithmetic"})
     }
 
     vulkan_check(vk.CreateDevice(ctx.physical_device, &device_create_info, nil, &ctx.device))
     vk.load_proc_addresses_device(ctx.device)
-
 }
+
 
 
 vulkan_allocate_memory :: proc(ctx: ^Vulkan_Context, kernel_operands: [$N]Kernel_Operand) {
@@ -259,7 +278,7 @@ vulkan_allocate_memory :: proc(ctx: ^Vulkan_Context, kernel_operands: [$N]Kernel
         for idx: u32 = 0; idx < memory_properties.memoryTypeCount; idx+=1 {
             fmt.printf("\n")
             fmt.printf("Memory Type %v:\n", idx)
-            memory_type = memory_properties.memoryTypes[idx]
+            memory_type := memory_properties.memoryTypes[idx]
             fmt.printf("%v\n", memory_type)
             memory_heap_size := memory_properties.memoryHeaps[memory_type.heapIndex].size
             fmt.printf("%v GB\n", (memory_heap_size / 1024 / 1024 / 1024))
@@ -520,8 +539,8 @@ vulkan_bind_descriptor_sets_to_cmd_buffer :: proc(
 }
 
 // We'll make a vec3 for these group counts
-vulkan_command_dispatch :: proc(ctx: ^Vulkan_Context, group_count_x: u32 = 1, group_count_y: u32 = 1, group_count_z: u32 = 1) {
-    vk.CmdDispatch(ctx.command_buffer, group_count_x, group_count_y, group_count_z)
+vulkan_command_dispatch :: proc(ctx: ^Vulkan_Context, layout: Grid_Layout) {
+    vk.CmdDispatch(ctx.command_buffer, layout.x, layout.y, layout.z)
     vk.EndCommandBuffer(ctx.command_buffer)
 }
 
@@ -564,18 +583,21 @@ vulkan_wait_for_fences :: proc(ctx: ^Vulkan_Context, fence_count: u32 = 1, wait_
 }
 
 
-vulkan_print_results :: proc(ctx: ^Vulkan_Context, N: uint, idx: int = 0) {
+vulkan_write_results :: proc(ctx: ^Vulkan_Context, N: uint, idx: int = 0) -> (out_array: [dynamic]f32) {
     out_buffer_ptr: rawptr
     vulkan_check(vk.MapMemory(ctx.device, ctx.device_memory[idx], ctx.buffer_offsets[idx], ctx.buffer_sizes[idx], nil, &out_buffer_ptr))
 
     out_buffer_data := ([^]f32)(out_buffer_ptr)
-    for i: uint = 0; i < N; i+=1 do fmt.printf("%v ", out_buffer_data[i])
+    for i: uint = 0; i < N; i+=1 { 
+        append(&out_array, out_buffer_data[i])
+    }
 
     vk.UnmapMemory(ctx.device, ctx.device_memory[idx])
+    return
 }
 
-
-vulkan_launch_kernel :: proc(operands: [$N]Kernel_Operand, spirv_bytecode: []byte) {
+// Need to make this type generic
+vulkan_launch_kernel :: proc(operands: [$N]Kernel_Operand, layout: Grid_Layout, spirv_bytecode: []byte) -> (output: [dynamic]f32) {
     ctx: Vulkan_Context
     vulkan_context_init(&ctx)
     vulkan_create_instance(&ctx)
@@ -596,12 +618,13 @@ vulkan_launch_kernel :: proc(operands: [$N]Kernel_Operand, spirv_bytecode: []byt
     vulkan_command_push_constants(&ctx)
     vulkan_bind_pipeline_to_cmd_buffer(&ctx)
     vulkan_bind_descriptor_sets_to_cmd_buffer(&ctx)
-    vulkan_command_dispatch(&ctx)
+    vulkan_command_dispatch(&ctx, layout)
     vulkan_get_queue(&ctx)
     vulkan_create_fence(&ctx)
     vulkan_submit_queue(&ctx)
     vulkan_wait_for_fences(&ctx)
-    vulkan_print_results(&ctx, operands[0].n_elem)
+    output = vulkan_write_results(&ctx, operands[0].n_elem)
     vulkan_context_destroy(&ctx)
+    return
 }
 
