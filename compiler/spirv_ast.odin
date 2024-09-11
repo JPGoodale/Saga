@@ -201,13 +201,19 @@ Function_Control :: enum {
     // Left out the INTEL one (once again)
 }
 
+GLSL_Instruction :: enum {
+    Exp,
+    // TODO: Add more
+}
+
 
 // ----------------------------------------------------------------------------------------------------
 // Instructions
 
 // This set of all instructions and the other unions for each Op family do not exist 
 // in the SPIR-V spec but are a handy abstraction for our AST
-OpAny :: union {
+Instruction :: union {
+    Operation,
     // Mode-Setting
     OpModeSetting,
     OpCapability,
@@ -218,6 +224,11 @@ OpAny :: union {
     OpAnnotation,
     OpDecorate,
     OpMemberDecorate,
+    // Extensions
+    OpExtension,
+    OpExtInstImport,
+    OpExtInst,
+    OpExtInstWithForwardRefsKHR,
     // Type-Declaration
     OpType,
     OpTypeVoid,
@@ -262,6 +273,61 @@ OpAny :: union {
     // Whatever family this is
     OpLabel,
     OpReturn,
+    // Relational and Logical
+    OpRelational,
+    OpLogical,
+    OpAny,
+    OpAll,
+    OpIsNan,
+    OpIsInf,
+    OpIsFinite,
+    OpIsNormal,
+    OpSignBitSet,
+    OpOrdered,
+    OpUnordered,
+    OpLogicalEqual,
+    OpLogicalNotEqual,
+    OpLogicalOr,
+    OpLogicalNot,
+    OpSelect,
+    OpIEqual,
+    OpINotEqual,
+    OpUGreaterThan,
+    OpSGreaterThan,
+    OpUGreaterThanEqual,
+    OpSGreaterThanEqual,
+    OpULessThan,
+    OpSLessThan,
+    OpULessThanEqual,
+    OpSLessThanEqual,
+    OpFOrdEqual,
+    OpFUnordEqual,
+    OpFOrdNotEqual,
+    OpFUnordNotEqual,
+    OpFOrdLessThan,
+    OpFUnordLessThan,
+    OpFOrdGreaterThan,
+    OpFUnordGreaterThan,
+    OpFOrdLessThanEqual,
+    OpFUnordLessThanEqual,
+    OpFOrdGreaterThanEqual,
+    OpFUnordGreaterThanEqual
+}
+
+
+// I know.. I know...
+Operation :: union {
+    OpExtInst,
+    OpBinaryExpr,
+    OpIAdd,
+    OpISub,
+    OpIMul,
+    OpSDiv,
+    OpUDiv,
+    OpFAdd,
+    OpFSub,
+    OpFMul,
+    OpFDiv,
 }
 
 
@@ -317,6 +383,15 @@ OpAnnotation :: union {
 }
 
 
+/*
+OpDecorate
+
+Add a Decoration to another <id>.
+
+Target is the <id> to decorate. It can potentially be any <id> that is a forward reference. A set of decorations can be grouped together by having multiple decoration instructions targeting the same OpDecorationGroup instruction.
+
+This instruction is only valid if the Decoration operand is a decoration that takes no Extra Operands, or takes Extra Operands that are not <id> operands.
+*/
 OpDecorate :: struct {
     target:                 Id,
     decoration:             Decoration,
@@ -324,11 +399,90 @@ OpDecorate :: struct {
 }
 
 
+/*
+OpMemberDecorate
+
+Add a Decoration to a member of a structure type.
+
+Structure type is the <id> of a type from OpTypeStruct.
+
+Member is the number of the member to decorate in the type. The first member is member 0, the next is member 1, …
+
+Note: See OpDecorate for creating groups of decorations for consumption by OpGroupMemberDecorate
+*/
 OpMemberDecorate :: struct {
     structure_type:         Id,
     member:                 u32,
     decoration:             Decoration,
     decoration_operands:    [dynamic]Decorate_Operand
+}
+
+
+// --------------------------------------------------
+// Extensions
+
+/*
+OpExtension
+
+Declare use of an extension to SPIR-V. This allows validation of additional instructions, tokens, semantics, etc.
+
+Name is the extension’s name string.
+*/
+OpExtension :: struct {
+    name: string
+}
+
+
+/*
+OpExtInstImport
+
+Import an extended set of instructions. It can be later referenced by the Result <id>.
+
+Name is the extended instruction-set’s name string. Before version 1.6, there must be an external specification defining the semantics for this extended instruction set. Starting with version 1.6, if Name starts with "NonSemantic.", including the period that separates the namespace "NonSemantic" from the rest of the name, it is encouraged for a specification to exist on the SPIR-V Registry, but it is not required.
+
+Starting with version 1.6, an extended instruction-set name which is prefixed with "NonSemantic." is guaranteed to contain only non-semantic instructions, and all OpExtInst instructions referencing this set can be ignored. All instructions within such a set must have only <id> operands; no literals. When literals are needed, then the Result <id> from an OpConstant or OpString instruction is referenced as appropriate. Result <id>s from these non-semantic instruction-set instructions must be used only in other non-semantic instructions.
+
+See Extended Instruction Sets for more information.
+*/
+OpExtInstImport :: struct {
+    result: Result_Id,
+    name:   string
+}
+
+
+/*
+OpExtInst
+
+Execute an instruction in an imported set of extended instructions.
+
+Result Type is defined, per Instruction, in the external specification for Set.
+
+Set is the result of an OpExtInstImport instruction.
+
+Instruction is the enumerant of the instruction to execute within Set. It is an unsigned 32-bit integer. The semantics of the instruction are defined in the external specification for Set.
+
+Operand 1, … are the operands to the extended instruction.
+*/
+OpExtInst :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    Set:            Id,
+    Instruction:    GLSL_Instruction,
+    operands:       [dynamic]Id
+}
+
+
+/*
+OpExtInstWithForwardRefsKHR
+
+Reserved.
+*/
+OpExtInstWithForwardRefsKHR :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    Set:            Id,
+    Instruction:    string,
+    operands:       [dynamic]Id
 }
 
 
@@ -658,4 +812,355 @@ OpLabel :: struct {
 }
 
 OpReturn :: struct {}
+
+
+// --------------------------------------------------
+// Relational and Logical
+
+OpRelational :: union {
+    OpAny,
+    OpAll,
+    OpIsNan,
+    OpIsInf,
+    OpIsFinite,
+    OpIsNormal,
+    OpSignBitSet,
+    OpOrdered,
+    OpUnordered,
+    OpSelect,
+    OpIEqual,
+    OpINotEqual,
+    OpUGreaterThan,
+    OpSGreaterThan,
+    OpUGreaterThanEqual,
+    OpSGreaterThanEqual,
+    OpULessThan,
+    OpSLessThan,
+    OpULessThanEqual,
+    OpSLessThanEqual,
+    OpFOrdEqual,
+    OpFUnordEqual,
+    OpFOrdNotEqual,
+    OpFUnordNotEqual,
+    OpFOrdLessThan,
+    OpFUnordLessThan,
+    OpFOrdGreaterThan,
+    OpFUnordGreaterThan,
+    OpFOrdLessThanEqual,
+    OpFUnordLessThanEqual,
+    OpFOrdGreaterThanEqual,
+    OpFUnordGreaterThanEqual
+}
+    
+
+OpLogical :: union {
+    OpLogicalEqual,
+    OpLogicalNotEqual,
+    OpLogicalOr,
+    OpLogicalNot,
+}
+
+
+OpAny :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    vector:         Id,
+}
+
+
+OpAll :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    vector:         Id,
+}
+
+
+OpIsNan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    x:              Id,
+}
+
+
+OpIsInf :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    x:              Id,
+}
+
+
+OpIsFinite :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    x:              Id,
+}
+
+
+OpIsNormal :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    x:              Id,
+}
+
+
+OpSignBitSet :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    x:              Id,
+}
+
+
+OpOrdered :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    x:              Id,
+    y:              Id,
+}
+
+
+OpUnordered :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    x:              Id,
+    y:              Id,
+}
+
+
+OpLogicalEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpLogicalNotEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpLogicalOr :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpLogicalAnd :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpLogicalNot :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+/*
+OpSelect
+
+Select between two objects. Before version 1.4, results are only computed per component.
+
+Before version 1.4, Result Type must be a pointer, scalar, or vector. Starting with version 1.4, Result Type can additionally be a composite type other than a vector.
+
+The types of Object 1 and Object 2 must be the same as Result Type.
+
+Condition must be a scalar or vector of Boolean type.
+
+If Condition is a scalar and true, the result is Object 1. If Condition is a scalar and false, the result is Object 2.
+
+If Condition is a vector, Result Type must be a vector with the same number of components as Condition and the result is a mix of Object 1 and Object 2: If a component of Condition is true, the corresponding component in the result is taken from Object 1, otherwise it is taken from Object 2.
+*/
+OpSelect :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    condition:      Id,
+    object_1:       Id,
+    object_2:       Id,
+}
+
+
+OpIEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpINotEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpUGreaterThan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpSGreaterThan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpUGreaterThanEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpSGreaterThanEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpULessThan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpSLessThan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpULessThanEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpSLessThanEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFOrdEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFUnordEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFOrdNotEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFUnordNotEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFOrdLessThan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFUnordLessThan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFOrdGreaterThan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFUnordGreaterThan :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFOrdLessThanEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFUnordLessThanEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFOrdGreaterThanEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
+
+
+OpFUnordGreaterThanEqual :: struct {
+    result:         Result_Id,
+    result_type:    Id,
+    operand_1:      Id,
+    operand_2:      Id,
+}
 

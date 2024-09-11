@@ -1,8 +1,9 @@
 module hellope
 
-layout [1024, 1, 1]
+GRID_LAYOUT    :: [1, 1, 1]
+BLOCK_LAYOUT   :: [128, 1, 1]
 
-main :: kernel(out: [1024]f32, input: [1024]f32, weight: [1024]f32, N: u32) {
-    out[tid.x] = input[tid.x] * weight[tid.x]
+main :: kernel(out: [128]f32, input: [128]f32, weight: [128]f32) {
+    out[thread_idx.x] = input[thread_idx.x] * weight[thread_idx.x]
 }
 

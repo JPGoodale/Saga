@@ -1,0 +1,78 @@
+OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 64 1 1
+       %void = OpTypeVoid
+       %func = OpTypeFunction %void
+        %int = OpTypeInt 32 0
+      %float = OpTypeFloat 32
+    %v3float = OpTypeVector %float 3
+ %ptr_float = OpTypePointer StorageBuffer %float
+%ptr_v3float = OpTypePointer Input %v3float
+    %struct_matrix = OpTypeStruct %float
+%ptr_struct_matrix = OpTypePointer StorageBuffer %struct_matrix
+    %struct_vector = OpTypeStruct %float
+%ptr_struct_vector = OpTypePointer StorageBuffer %struct_vector
+    %struct_result = OpTypeStruct %float
+%ptr_struct_result = OpTypePointer StorageBuffer %struct_result
+
+     %int_0 = OpConstant %int 0
+     %int_1 = OpConstant %int 1
+  %int_1024 = OpConstant %int 1024
+ %float_0_0 = OpConstant %float 0.0
+
+%gl_GlobalInvocationID = OpVariable %ptr_v3float Input
+
+        %matrix = OpVariable %ptr_struct_matrix StorageBuffer
+        %vector = OpVariable %ptr_struct_vector StorageBuffer
+        %result = OpVariable %ptr_struct_result StorageBuffer
+
+       %main = OpFunction %void None %func
+      %entry = OpLabel
+               ; Get global ID
+        %gid = OpLoad %v3float %gl_GlobalInvocationID
+     %gid_x = OpCompositeExtract %float %gid 0
+    %gid_int = OpConvertFToS %int %gid_x
+
+               ; Check if we're within bounds
+    %in_bounds = OpULessThan %bool %gid_int %int_1024
+               OpSelectionMerge %merge None
+               OpBranchConditional %in_bounds %compute %merge
+
+    %compute = OpLabel
+               ; Initialize sum
+        %sum = OpVariable %ptr_float Function %float_0_0
+
+               ; Perform dot product for this row
+        %for_loop = OpLabel
+        %i = OpPhi %int %int_0 %compute %next_i %for_loop
+        %current_sum = OpPhi %float %float_0_0 %compute %new_sum %for_loop
+
+               ; Load matrix element
+        %matrix_index = OpIMul %int %gid_int %int_1024
+        %matrix_index_offset = OpIAdd %int %matrix_index %i
+        %matrix_element_ptr = OpAccessChain %ptr_float %matrix %int_0 %matrix_index_offset
+        %matrix_element = OpLoad %float %matrix_element_ptr
+
+               ; Load vector element
+        %vector_element_ptr = OpAccessChain %ptr_float %vector %int_0 %i
+        %vector_element = OpLoad %float %vector_element_ptr
+
+               ; Multiply and add
+        %product = OpFMul %float %matrix_element %vector_element
+        %new_sum = OpFAdd %float %current_sum %product
+
+               ; Loop condition
+        %next_i = OpIAdd %int %i %int_1
+        %loop_cond = OpSLessThan %bool %next_i %int_1024
+               OpLoopMerge %for_merge %for_loop None
+               OpBranchConditional %loop_cond %for_loop %for_merge
+
+    %for_merge = OpLabel
+               ; Store result
+        %result_ptr = OpAccessChain %ptr_float %result %int_0 %gid_int
+               OpStore %result_ptr %new_sum
+
+      %merge = OpLabel
+               OpReturn
+               OpFunctionEnd

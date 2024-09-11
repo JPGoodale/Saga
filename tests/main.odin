@@ -5,10 +5,9 @@ import rt "../runtime"
 
 
 main :: proc() {
-    input := rt.fill_f32(256, 5)
-    weight := rt.fill_f32(256, 5)
-    out := rms_norm(input, weight)
-    for i in 0..<256 do fmt.printf("%v\n", out[i])
+    x: f32 = 9
+    y := math.exp(x)
+    fmt.println(y)
 }
 
 
@@ -26,3 +25,16 @@ rms_norm :: proc(input: [$N]f32, weight: [N]f32) -> (out: [N]f32,) {
     return
 }
 
+
+softmax :: proc(x: [$N]f32) -> (y: [N]f32) {
+	numerator: [N]f32
+	denominator: f32
+	for value, idx in x {
+		numerator[idx] = math.exp(x[idx])
+		denominator += math.exp(x[idx])
+	}
+	for value, idx in numerator {
+		y[idx] = numerator[idx] / denominator
+	}		
+	return
+}

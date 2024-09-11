@@ -35,7 +35,7 @@ write_to_file :: proc(file_handle: os.Handle, content: string) {
 }
 
 
-generate_spirv_instruction:: proc(file_handle: os.Handle, ast_node: OpAny) {
+generate_spirv_instruction:: proc(file_handle: os.Handle, ast_node: Instruction) {
     generic_node: Generic_Spirv_Node
     #partial switch n in ast_node {
     case OpReturn, OpFunctionEnd:
@@ -109,6 +109,7 @@ generate_spirv :: proc(ast: [dynamic]AST_Node) -> (binary_file: string) {
     os.truncate(asm_file, 0)
     os.seek(o, 0, os.SEEK_END)
     generate_spirv_instruction(o, ctx.capability)
+    for extension in ctx.extensions do generate_spirv_instruction(o, extension)
     generate_spirv_instruction(o, ctx.memory_model)
     generate_spirv_instruction(o, ctx.entry_point)
     generate_spirv_instruction(o, ctx.execution_mode)
@@ -123,7 +124,7 @@ generate_spirv :: proc(ast: [dynamic]AST_Node) -> (binary_file: string) {
     for comp in ctx.composites do generate_spirv_instruction(o, comp)
     for chain in ctx.access_chains do generate_spirv_instruction(o, chain)
     for load in ctx.loads[1:] do generate_spirv_instruction(o, load)
-    for op in ctx.binary_ops do generate_spirv_instruction(o, op)
+    for op in ctx.operations do generate_spirv_instruction(o, op)
     for store in ctx.stores do generate_spirv_instruction(o, store)
     generate_spirv_instruction(o, ctx.kernel_return)
     generate_spirv_instruction(o, ctx.kernel_function_end)

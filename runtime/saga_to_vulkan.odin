@@ -1,6 +1,13 @@
 package saga_runtime
 
 
+Grid_Layout :: struct {
+    x: u32,
+    y: u32,
+    z: u32
+}
+
+
 Kernel_Operand :: struct {
     data:               rawptr,
     size:               uint,

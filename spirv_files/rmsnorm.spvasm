@@ -1,0 +1,78 @@
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformArithmetic
+%glsl = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
+OpExecutionMode %main LocalSize 1024 1 1
+
+OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+OpDecorate %_array_float ArrayStride 4
+OpDecorate %_structured_array_float Block 
+OpMemberDecorate %_structured_array_float 0 Offset 0
+OpDecorate %out DescriptorSet 0
+OpDecorate %out Binding 0
+OpDecorate %input DescriptorSet 0
+OpDecorate %input Binding 1
+OpDecorate %weight DescriptorSet 0
+OpDecorate %weight Binding 2
+OpMemberDecorate %push_constant 0 Offset 0
+OpDecorate %push_constant Block 
+
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32 
+
+%subgroup_scope = OpConstant %uint 3
+%zeroth_thread_id = OpConstant %uint 0
+%uint_1024 = OpConstant %uint 1024
+%epsilon = OpConstant %float 0.00001
+
+%v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+
+%void = OpTypeVoid
+%func_result = OpTypeFunction %void 
+
+%_ptr_StorageBuffer_float = OpTypePointer StorageBuffer %float
+
+%_array_float = OpTypeArray %float %uint_1024
+%_structured_array_float = OpTypeStruct %_array_float
+%_ptr_StorageBuffer_structured_array_float = OpTypePointer StorageBuffer %_structured_array_float
+
+%push_constant = OpTypeStruct %float
+%_ptr_push_constant = OpTypePointer PushConstant %push_constant
+%_ptr_push_constant_float = OpTypePointer PushConstant %float
+
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input 
+%out = OpVariable %_ptr_StorageBuffer_structured_array_float StorageBuffer
+%input = OpVariable %_ptr_StorageBuffer_structured_array_float StorageBuffer
+%weight = OpVariable %_ptr_StorageBuffer_structured_array_float StorageBuffer
+%N = OpVariable %_ptr_push_constant PushConstant
+
+%main = OpFunction %void None %func_result
+%body = OpLabel
+
+%layout_ptr = OpLoad %v3uint %gl_GlobalInvocationID 
+%max_thread_id_x = OpCompositeExtract %uint %layout_ptr 0
+
+%input_access_chain = OpAccessChain %_ptr_StorageBuffer_float %input %zeroth_thread_id %max_thread_id_x
+%out_access_chain = OpAccessChain %_ptr_StorageBuffer_float %out %zeroth_thread_id %max_thread_id_x
+%weight_access_chain = OpAccessChain %_ptr_StorageBuffer_float %weight %zeroth_thread_id %max_thread_id_x
+%N_access_chain = OpAccessChain %_ptr_push_constant_float %N %zeroth_thread_id
+
+%input_register = OpLoad %float %input_access_chain
+%weight_register = OpLoad %float %weight_access_chain
+%N_register = OpLoad %float %N_access_chain 
+
+%square = OpFMul %float %input_register %input_register
+%warpsum = OpGroupNonUniformFAdd %float %subgroup_scope Reduce %square
+%warpsum2 = OpGroupNonUniformFAdd %float %subgroup_scope Reduce %warpsum
+%quotient = OpFDiv %float %warpsum2 %N_register
+%epsilon_sum = OpFAdd %float %quotient %epsilon
+%reciprical_sqrt = OpExtInst %float %glsl InverseSqrt %epsilon_sum
+%product = OpFMul %float %reciprical_sqrt %input_register
+%rmsnorm = OpFMul %float %weight_register %product
+
+OpStore %out_access_chain %rmsnorm
+OpReturn
+OpFunctionEnd
