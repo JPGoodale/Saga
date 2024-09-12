@@ -6,6 +6,7 @@ import "core:strconv"
 
 
 Ctx :: struct {
+    grid_layout:            Layout,
     module_name:            string,
     capability:             OpCapability,
     memory_model:           OpMemoryModel,
@@ -83,7 +84,10 @@ translate_module :: proc(ctx: ^Ctx, node: Module) {
 
 
 translate_layout :: proc(ctx: ^Ctx, node: Layout) {
-    if node.is_grid do return
+    if node.is_grid {
+        ctx.grid_layout = node
+        return
+    }
 
     execution_mode                  : OpExecutionMode
     execution_mode.mode             = .LocalSize
@@ -102,7 +106,7 @@ translate_layout :: proc(ctx: ^Ctx, node: Layout) {
     uint.width                      = 32
     uint.signedness                 = 0
     append(&ctx.scalar_types, uint)
-    ctx.scalar_type_map["u32"] = "%uint"
+    ctx.scalar_type_map["u32"] = "%uint32"
 
     uint_vec3                       : OpTypeVector
     uint_vec3.result                = auto_cast("%v3uint32")
@@ -243,7 +247,7 @@ translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]Argument) {
             variable.storage_class              = .PushConstant
             append(&ctx.variables, variable)
 
-            pointer.result                      = create_result_id({"%_ptr_push_constant", type_name})
+            pointer.result                      = create_result_id({"%_ptr_push_constant_", type_name})
             pointer.storage_class               = .PushConstant
             pointer.type                        = create_id({"%", type_name})
             append(&ctx.types, pointer)
@@ -496,7 +500,7 @@ translate_kernel_body :: proc(ctx: ^Ctx, nodes: [dynamic]Expression) {
                 log.error("I'm afraid only binary expressions and call expressions are supported at this time.. a pity, tisn't it?")
             }
         case Conditional_Expression:
-            // translate_conditional_expression(ctx, n)
+            translate_conditional_expression(ctx, n)
         case:
             fmt.println(n)
             log.error("I'm afraid only variable and conditional expressions are supported at this time.. a pity, tisn't it?")
@@ -506,12 +510,18 @@ translate_kernel_body :: proc(ctx: ^Ctx, nodes: [dynamic]Expression) {
 
 
 translate_conditional_expression :: proc(ctx: ^Ctx, node: Conditional_Expression) {
-    
+    // OpBranch %loop_header
+    // %loop_header = OpLabel
+    // %30 = OpLoad %uint %i
+    // %31 = OpULessThan %bool %30 %uint_128
+    // OpLoopMerge %loop_merge %loop_continue None
+    // OpBranchConditional %31 %loop_body %loop_merge
+    // %loop_body = OpLabel
 }
 
 
 // Only works on kernel args as of now
-translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: Binary_Expression, is_subexpr: bool = false) -> (result_id: Id) {
+translate_binary_op :: proc(ctx: ^Ctx, root_node: Expression, op_node: Binary_Expression, is_subexpr: bool = false) -> (result_id: Id) {
     // -----------------------------------------------------------------------------------
     // Left-Hand-Side
 
@@ -713,21 +723,24 @@ translate_binary_op :: proc(ctx: ^Ctx, root_node: Variable_Expression, op_node: 
     // Result
 
     if !(is_subexpr) {
-        result_name_id                  := create_id({"%", root_node.name})
-        result_max_thread_id            := translate_thread_id(ctx, root_node.thread_id)
-        result_element_type             := ctx.arg_scalar_type_map[result_name_id]
+        #partial switch n in root_node {
+        case Variable_Expression:
+            result_name_id                  := create_id({"%", n.name})
+            result_max_thread_id            := translate_thread_id(ctx, n.thread_id)
+            result_element_type             := ctx.arg_scalar_type_map[result_name_id]
 
-        result_access_chain             : OpAccessChain
-        result_access_chain.result      = create_result_id({string(result_name_id), "_access_chain"})
-        result_access_chain.result_type = auto_cast(ctx.register_ptr_map[result_element_type])
-        result_access_chain.base        = result_name_id
-        result_access_chain.indexes     = {ctx.zeroth_thread_id, result_max_thread_id}
-        append(&ctx.access_chains, result_access_chain)
-        
-        store: OpStore
-        store.pointer = auto_cast(result_access_chain.result)
-        store.object = auto_cast(result)
-        append(&ctx.stores, store)
+            result_access_chain             : OpAccessChain
+            result_access_chain.result      = create_result_id({string(result_name_id), "_access_chain"})
+            result_access_chain.result_type = auto_cast(ctx.register_ptr_map[result_element_type])
+            result_access_chain.base        = result_name_id
+            result_access_chain.indexes     = {ctx.zeroth_thread_id, result_max_thread_id}
+            append(&ctx.access_chains, result_access_chain)
+            
+            store: OpStore
+            store.pointer = auto_cast(result_access_chain.result)
+            store.object = auto_cast(result)
+            append(&ctx.stores, store)
+        }
     }
     else {
        return auto_cast(result)

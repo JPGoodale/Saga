@@ -4,7 +4,7 @@ OpCapability GroupNonUniformArithmetic
 %glsl = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
 OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
-OpExecutionMode %main LocalSize 1024 1 1
+OpExecutionMode %main LocalSize 128 1 1
 
 OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
 OpDecorate %_array_float ArrayStride 4
@@ -20,14 +20,14 @@ OpDecorate %input Binding 1
 
 %subgroup_scope = OpConstant %uint 3
 %zeroth_thread_id = OpConstant %uint 0
-%uint_1024 = OpConstant %uint 1024
+%uint_128 = OpConstant %uint 128
 
 %v3uint = OpTypeVector %uint 3
 %_ptr_Input_v3uint = OpTypePointer Input %v3uint
 %void = OpTypeVoid
 %func_result = OpTypeFunction %void 
 %_ptr_StorageBuffer_float = OpTypePointer StorageBuffer %float
-%_array_float = OpTypeArray %float %uint_1024
+%_array_float = OpTypeArray %float %uint_128
 %_structured_array_float = OpTypeStruct %_array_float
 %_ptr_StorageBuffer_structured_array_float = OpTypePointer StorageBuffer %_structured_array_float
 

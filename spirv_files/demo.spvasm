@@ -1,4 +1,4 @@
-OpCapability Shader
+jOpCapability Shader
 %glsl = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
 OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID

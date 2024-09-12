@@ -2,7 +2,7 @@ OpCapability Shader
 %glsl = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
 OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID
-OpExecutionMode %main LocalSize 1024 1 1
+OpExecutionMode %main LocalSize 32 1 1
 OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
 OpDecorate %_array_float32 ArrayStride 4
 OpDecorate %_structured_array_float32 Block 
@@ -16,13 +16,13 @@ OpDecorate %weight Binding 2
 %uint32 = OpTypeInt 32 0
 %float32 = OpTypeFloat 32 
 %zeroth_thread_id = OpConstant %uint32 0
-%uint32_1024 = OpConstant %uint32 1024
+%uint32_128 = OpConstant %uint32 128
 %v3uint32 = OpTypeVector %uint32 3
 %_ptr_Input_v3uint32 = OpTypePointer Input %v3uint32
 %void = OpTypeVoid
 %func_result = OpTypeFunction %void 
 %_ptr_StorageBuffer_float32 = OpTypePointer StorageBuffer %float32
-%_array_float32 = OpTypeArray %float32 %uint32_1024
+%_array_float32 = OpTypeArray %float32 %uint32_128
 %_structured_array_float32 = OpTypeStruct %_array_float32
 %_ptr_StorageBuffer_structured_array_float32 = OpTypePointer StorageBuffer %_structured_array_float32
 %gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint32 Input 
@@ -38,7 +38,8 @@ OpDecorate %weight Binding 2
 %out_access_chain = OpAccessChain %_ptr_StorageBuffer_float32 %out %zeroth_thread_id %max_thread_id_x
 %input_register = OpLoad %float32 %input_access_chain 
 %weight_register = OpLoad %float32 %weight_access_chain 
-%product = OpFMul %float32 %input_register %weight_register
+%exp = OpExtInst %float32 %glsl Exp %input_register
+%product = OpFMul %float32 %exp %weight_register
 OpStore %out_access_chain %product 
 OpReturn
 OpFunctionEnd

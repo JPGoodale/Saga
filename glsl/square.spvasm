@@ -82,16 +82,19 @@
 
        %main = OpFunction %void None %3
           %5 = OpLabel
+
          %14 = OpAccessChain %_ptr_Input_uint %gl_GlobalInvocationID %uint_0
          %15 = OpLoad %uint %14
                OpStore %id %15
          %16 = OpLoad %uint %id
          %23 = OpAccessChain %_ptr_PushConstant_uint %_ %int_0
          %24 = OpLoad %uint %23
+
          %26 = OpULessThan %bool %16 %24
                OpSelectionMerge %28 None
                OpBranchConditional %26 %27 %28
          %27 = OpLabel
+
          %34 = OpLoad %uint %id
          %39 = OpLoad %uint %id
          %41 = OpAccessChain %_ptr_StorageBuffer_float %__1 %int_0 %39
