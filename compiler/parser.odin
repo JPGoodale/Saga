@@ -308,6 +308,11 @@ parse_expression :: proc(p: ^Parser, prev_expr: Expression = nil, prev_op_token:
             arg, err := parse_value(p, _next_token)
             append(&function_args, arg)
         }
+        another_token := parser_peek(p)
+        if is_unary_builtin_function(next_token.value) && another_token.type == .Open_Bracket {
+            parser_advance(p)
+            function_args[0].thread_id, err = parse_array_index(p)
+        }
         lhs = Call_Expression{next_token.value, function_args}
     }
     else {

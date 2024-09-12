@@ -112,9 +112,18 @@ is_builtin_variable :: proc(s: string) -> bool {
 }
 
 
-is_builtin_function :: proc(s: string) -> bool {
+is_unary_builtin_function :: proc(s: string) -> bool {
     switch s {
-    case "sin", "cos", "tanh", "exp", "log", "dot", "max", "min", "sqrt", "swizzle": 
+    case "sin", "cos", "tanh", "exp", "log", "pow", "sqrt": 
+        return true
+    }
+    return false
+}
+
+
+is_binary_builtin_function :: proc(s: string) -> bool {
+    switch s {
+    case "min", "max": 
         return true
     }
     return false
@@ -294,7 +303,7 @@ lex :: proc(reader_stream: io.Reader) -> [dynamic]Token {
         case token_str == "\n":
             token = Token{.Newline, token_str} 
 
-        case is_builtin_function(token_str): 
+        case is_unary_builtin_function(token_str), is_binary_builtin_function(token_str): 
             token = Token{.Function_Call, token_str}
 
         case is_builtin_variable(token_str):

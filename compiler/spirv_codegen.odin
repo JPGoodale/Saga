@@ -2,7 +2,9 @@ package saga_compiler
 import "core:os"
 import "core:fmt"
 import "core:strings"
+import "core:strconv"
 import "core:c/libc"
+import rt "../runtime"
 
 // For better readability
 split               :: strings.split
@@ -12,6 +14,7 @@ join                :: strings.join
 remove_all          :: strings.remove_all
 contains            :: strings.contains
 clone_to_cstring    :: strings.clone_to_cstring
+atoi                :: strconv.atoi
 
 
 Generic_Spirv_Node :: struct {
@@ -100,9 +103,14 @@ generate_spirv_instruction:: proc(file_handle: os.Handle, ast_node: Instruction)
 }
 
 
-generate_spirv :: proc(ast: [dynamic]AST_Node) -> (binary_file: string) {
+generate_spirv :: proc(ast: [dynamic]AST_Node) -> (binary_file: string, grid_layout: rt.Grid_Layout) {
     ctx: Ctx
     for node in ast do parse_node(&ctx, node)
+    grid_layout = rt.Grid_Layout {
+        u32(atoi(ctx.grid_layout.x)), 
+        u32(atoi(ctx.grid_layout.y)), 
+        u32(atoi(ctx.grid_layout.z))
+    }
     asm_file    := join({".\\spirv_files\\", ctx.module_name, ".spvasm"}, "")
     o, err      := os.open(asm_file, os.O_WRONLY|os.O_CREATE, 0644)
     defer os.close(o)
