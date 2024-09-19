@@ -197,23 +197,6 @@ split_tokens :: proc(data: []byte, at_eof: bool) -> (advance: int, token: []byte
         return
     }
 
-    // if is_alpha(r) || r == '_' {
-    //     end := start + width
-    //     for end < len(data) {
-    //         r, w := utf8.decode_rune(data[end:])
-    //         if !is_alpha(r) && !is_digit(r) && r != '.' && r != '_' do break
-    //         end += w
-    //     }
-    //     if end < len(data) && data[end] == '(' {
-    //         advance = end
-    //         token = data[start:end]
-    //         return
-    //     }
-    //     advance = end
-    //     token = data[start:end]
-    //     return
-    // }
-
     if is_alpha(r) || r == '_' {
         end := start + width
         for end < len(data) {

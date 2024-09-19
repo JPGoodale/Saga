@@ -113,10 +113,6 @@ generate_spirv :: proc(ast: [dynamic]AST_Node, output_dir: string) -> (binary_fi
         u32(atoi(ctx.grid_layout.z))
     }
 
-    // asm_file := join({".\\spirv_gen\\", ctx.module_name, ".spvasm"}, "")
-    // o, err := os.open(asm_file, os.O_WRONLY|os.O_CREATE, 0644)
-    // defer os.close(o)
-
     asm_file := filepath.join([]string{output_dir, fmt.tprintf("%s.spvasm", ctx.module_name)})
     o, err := os.open(asm_file, os.O_WRONLY|os.O_CREATE, 0o644)
     if err != 0 {
@@ -146,15 +142,9 @@ generate_spirv :: proc(ast: [dynamic]AST_Node, output_dir: string) -> (binary_fi
     for op in ctx.operations do generate_spirv_instruction(o, op)
     generate_spirv_instruction(o, ctx.kernel_return)
     generate_spirv_instruction(o, ctx.kernel_function_end)
-
-    // cmd := clone_to_cstring(join({".\\spirv_gen\\assemble.bat", asm_file}, " "))
-    // libc.system(cmd)
-    // binary_file = join({".\\spirv_gen\\", ctx.module_name, ".spv"}, "")
-    //
-    assemble_script := filepath.join({output_dir, "assemble.bat"})
+    assemble_script := filepath.join({output_dir, "assemble.bat"}) // Need to add a bash script for posix systems
     cmd := strings.clone_to_cstring(fmt.tprintf("%s %s", assemble_script, asm_file))
     libc.system(cmd)
-    
     binary_file = filepath.join({output_dir, fmt.tprintf("%s.spv", ctx.module_name)})
     return
 }

@@ -32,7 +32,7 @@ Ctx :: struct {
     storage_buffer_ids:     [dynamic]Id,
     workgroup_buffer_ids:   [dynamic]Id,
     variable_map:           map[Result_Id]OpVariable,
-    arg_scalar_type_map:    map[Id]string, // Shoudl probably just replace all these with the regular scalar type map
+    arg_scalar_type_map:    map[Id]string, // Should probably just replace all these with the regular scalar type map
     constant_map:           map[Result_Id]bool, // Not really a map.. used for checking if a constant already exists
     access_chain_map:       map[Result_Id]bool, // ^ Same as above but for access chains
     load_map:               map[Result_Id]bool, // ^^^

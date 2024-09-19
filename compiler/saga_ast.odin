@@ -166,7 +166,7 @@ Thread :: struct {
     value: string
 }
 
-
+// TODO: Needs refactored.. does not look very nice on the console
 print_node :: proc(node: AST_Node, indent: int = 0) {
     indent_str := strings.repeat(" ", indent)
     
