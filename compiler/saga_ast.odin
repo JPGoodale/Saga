@@ -14,6 +14,7 @@ AST_Node :: union {
     Kernel,
     Expression,
     Value,
+    Literal,
     Type,
     Scalar_Type,
     Array_Type
@@ -88,16 +89,26 @@ Kernel :: struct {
 
 Expression :: union {
     Variable_Expression,
+    Variable_Declaration,
     Binary_Expression,
     Conditional_Expression,
+    Loop_Expression,
     Call_Expression,
     Value,
+    Literal,
+    Thread_Idx
+}
+
+
+Variable_Declaration :: struct {
+    name:       string,
+    type:       Type,
 }
 
 
 Variable_Expression :: struct {
     name:       string,
-    thread_id:  string,
+    thread_id:  Thread_Idx,
     type:       Type,
     value:      ^Expression,
 }
@@ -116,6 +127,15 @@ Conditional_Expression :: struct {
 }
 
 
+// Need to adjust this so that the start and stop can be variables as well
+Loop_Expression :: struct {
+    start:  ^Literal,
+    end:    ^Literal,
+    body:   [dynamic]Expression
+
+}
+
+
 Call_Expression :: struct {
     callee: string,
     args:   [dynamic]Value,
@@ -124,8 +144,26 @@ Call_Expression :: struct {
 
 Value :: struct {
     value:          string,
-    thread_id:      string,
+    thread_id:      Thread_Idx,
     type:           Type,
+}
+
+
+// Only scalar literals are supported atm
+Literal :: struct {
+    value:          string,
+    type:           string,
+}
+
+
+Thread_Idx :: union {
+    Thread,
+    Binary_Expression
+}
+
+
+Thread :: struct {
+    value: string
 }
 
 
@@ -162,8 +200,10 @@ print_node :: proc(node: AST_Node, indent: int = 0) {
         fmt.printf("%sScalar Arg: %s %v\n", indent_str, n.name, n.type)
     case Expression:
         switch e in n {
+        case Variable_Declaration:
+            fmt.printf("%sVariable: %v, %v\n", indent_str, e.name, e.type)
         case Variable_Expression:
-            fmt.printf("%sVariable: %s[%s] %v\n", indent_str, e.name, e.thread_id, e.type)
+            fmt.printf("%sVariable: %s, %v, %v\n", indent_str, e.name, e.thread_id, e.type)
             if e.value != nil {
                 fmt.printf("%s  Value:\n", indent_str)
                 print_node(e.value^, indent + 4)
@@ -182,6 +222,16 @@ print_node :: proc(node: AST_Node, indent: int = 0) {
             for expr in e.body {
                 print_node(expr, indent + 4)
             }
+        case Loop_Expression:
+            fmt.printf("%sLoop:\n", indent_str)
+            fmt.printf("%s  Start:\n", indent_str)
+            print_node(e.start^, indent + 4)
+            fmt.printf("%s  End:\n", indent_str)
+            print_node(e.end^, indent + 4)
+            fmt.printf("%s  Body:\n", indent_str)
+            for expr in e.body {
+                print_node(expr, indent + 4)
+            }
         case Call_Expression:
             fmt.printf("%sFunction Call: %s\n", indent_str, e.callee)
             fmt.printf("%s  Arguments:\n", indent_str)
@@ -189,7 +239,20 @@ print_node :: proc(node: AST_Node, indent: int = 0) {
                 print_node(arg, indent + 4)
             }
         case Value:
-            fmt.printf("%sValue: %s[%s] %v\n", indent_str, e.value, e.thread_id, e.type)
+            fmt.printf("%sValue: %s, %v, %v\n", indent_str, e.value, e.thread_id, e.type)
+        case Literal:
+            fmt.printf("%sValue: %v, %v\n", indent_str, e.value, e.type)
+        case Thread_Idx:
+            switch t in e {
+            case Thread:
+                fmt.printf("%sValue: %v\n", indent_str, t)
+            case Binary_Expression:
+                fmt.printf("%sBinary Op: %s\n", indent_str, t.op)
+                fmt.printf("%s  Left:\n", indent_str)
+                print_node(t.lhs^, indent + 4)
+                fmt.printf("%s  Right:\n", indent_str)
+                print_node(t.rhs^, indent + 4)
+            }
         }
     case Type:
         switch t in n {

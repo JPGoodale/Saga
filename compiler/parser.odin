@@ -1,6 +1,8 @@
 package saga_compiler
 import "core:log"
 import "core:fmt"
+import "core:strings"
+import "core:strconv"
 
 
 Parsing_Error :: enum {
@@ -192,8 +194,16 @@ parse_type :: proc(p: ^Parser, type_token: Token) -> (type: Type, err: Parsing_E
                end_index = idx 
             }
         } 
-        n_elements      := type_token.value[1:end_index]
-        element_type    := type_token.value[end_index+1:]
+        n_elements: string
+        found, idx := contains_at(type_token.value, "x") 
+        if found {
+            n := strconv.atoi(type_token.value[1:idx]) * strconv.atoi(type_token.value[idx+1:end_index])
+            n_elements = fmt.tprint(n)
+        }
+        else {
+            n_elements = type_token.value[1:end_index]
+        }
+        element_type := type_token.value[end_index+1:]
         type = Array_Type {n_elements, element_type}
         return
     }
@@ -243,32 +253,71 @@ parse_kernel_args :: proc(p: ^Parser) -> (args: [dynamic]Argument, err: Parsing_
 }
 
 
-parse_array_index :: proc(p: ^Parser) -> (index: string, err: Parsing_Error) {
-    // parser_advance(p)
-    index = parser_advance(p).value
-    next_token := parser_advance(p)
-    err = expect_token_type(next_token, .Close_Bracket) // Need to handle cases like tid.x + 16
-    return
+parse_thread_idx :: proc(p: ^Parser) -> (node: Thread_Idx, err: Parsing_Error) {
+    thread := parser_advance(p).value
+    node = Thread{thread}
+    _lhs: Expression = node
+
+    op_token := parser_peek(p)
+    #partial switch op_token.type {
+    case .Close_Bracket:
+        parser_advance(p)
+        return
+    case .Addition_Operator, .Subtraction_Operator, .Multiplication_Operator, .Division_Operator:
+        next_token := parser_advance(p)
+        rhs: Expression
+        rhs, err = parse_expression(p)
+        if err != nil do return
+        #partial switch expr in rhs {
+        case Binary_Expression:
+            if operator_precedence(expr.op) < operator_precedence(op_token.value) {
+                lhs : Expression = Binary_Expression{op_token.value, new_clone(_lhs), expr.lhs}
+                rhs := expr.rhs
+                node = Binary_Expression{expr.op, new_clone(lhs), rhs}
+                parser_advance(p)
+                return
+            }
+        }
+        node = Binary_Expression{op_token.value, new_clone(_lhs), new_clone(rhs)}
+        parser_advance(p)
+        return
+    case:
+        log.errorf("Invalid expression.") 
+        err = .Syntax_Error
+        return
+    }
 }
 
 
-parse_value :: proc(p: ^Parser, token: Token) -> (node: Value, err: Parsing_Error) {
+parse_value :: proc(p: ^Parser, token: Token) -> (node: Expression, err: Parsing_Error) {
     #partial switch token.type {
-    // TODO: Add Literal type parsing
     case .Literal:
-        node = Value{token.value, "", nil}
+    // TODO: make this type parsing more robust
+        // type: Type
+        type: string
+        if strings.contains(token.value, ".") {
+            // type = Scalar_Type{"f32"}
+            type = "f32"
+        }
+        else {
+            // type = Scalar_Type{"u32"}
+            type = "u32"
+        }
+        // node = Value{token.value, nil, type}
+        node = Literal{token.value, type}
         return
     case .Builtin_Variable:
-        node = Value{token.value, "", nil}
+        value: Thread_Idx = Thread{token.value}
+        node = value
         return
     case .Identifier:
-        thread_index: string
+        thread_index: Thread_Idx
         if parser_peek(p).type == .Open_Bracket {
             parser_advance(p)
-            thread_index, err = parse_array_index(p)
+            thread_index, err = parse_thread_idx(p)
             if err != nil do return
         }
-        else { thread_index =  "" }
+        else { thread_index =  nil }
         type, err := parser_infer_variable_type(p, token)
         if err != nil do return
         node = Value{token.value, thread_index, type}
@@ -306,12 +355,15 @@ parse_expression :: proc(p: ^Parser, prev_expr: Expression = nil, prev_op_token:
             _next_token = parser_advance(p)
             if _next_token.type == .Close_Parenthese do break
             arg, err := parse_value(p, _next_token)
-            append(&function_args, arg)
+            #partial switch a in arg {
+            case Value:
+                append(&function_args, a)
+            }
         }
         another_token := parser_peek(p)
         if is_unary_builtin_function(next_token.value) && another_token.type == .Open_Bracket {
             parser_advance(p)
-            function_args[0].thread_id, err = parse_array_index(p)
+            function_args[0].thread_id, err = parse_thread_idx(p)
         }
         lhs = Call_Expression{next_token.value, function_args}
     }
@@ -338,8 +390,7 @@ parse_expression :: proc(p: ^Parser, prev_expr: Expression = nil, prev_op_token:
         }
         node = Binary_Expression{op_token.value, new_clone(lhs), new_clone(rhs)}
         return
-    // TODO: Add Literal type parsing
-    case .Literal, .Newline:
+    case .Literal, .Newline, .Close_Bracket: // Close Bracket here just for thread index expressions, need to throw an error in other cases
         node = lhs
         return
     case:
@@ -350,12 +401,11 @@ parse_expression :: proc(p: ^Parser, prev_expr: Expression = nil, prev_op_token:
 }
 
 
-
 parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expression, err: Parsing_Error) {
     next_token := parser_advance(p)
     #partial switch next_token.type {
     case .Open_Bracket:
-        thread_index, err := parse_array_index(p)
+        thread_index, err := parse_thread_idx(p)
         if err != nil do return
 
         next_token = parser_advance(p)
@@ -376,8 +426,15 @@ parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expre
         type_token := parser_advance(p)
         err = expect_token_type(type_token, .Type_Identifier)
         if err != nil do return
+
         type, err := parse_type(p, type_token)
         if err != nil do return
+
+        if parser_peek(p).type == .Newline {
+            node = Variable_Declaration{name_token.value, type}
+            parser_capture_variable(p, name_token.value, type)
+            return
+        }
 
         next_token := parser_advance(p)
         err = expect_token_type(next_token, .Variable_Assignment_Operator)
@@ -387,7 +444,7 @@ parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expre
         value, err = parse_expression(p)
         if err != nil do return
 
-        node = Variable_Expression{name_token.value, "", type, new_clone(value)}
+        node = Variable_Expression{name_token.value, nil, type, new_clone(value)}
         parser_capture_variable(p, name_token.value, type)
         return
     case .Variable_Assignment_Operator:
@@ -399,7 +456,7 @@ parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expre
         value, err = parse_expression(p)
         if err != nil do return
 
-        node = Variable_Expression{name_token.value, "", type, new_clone(value)}
+        node = Variable_Expression{name_token.value, nil, type, new_clone(value)}
         return
     case .Constant_Assignment_Operator:
         log.errorf("All constants must be declared outside of kernel.") 
@@ -413,7 +470,7 @@ parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expre
 }
 
 
-parse_conditional_expression :: proc(p: ^Parser, keyword_token: Token) -> (node: Conditional_Expression, err: Parsing_Error) {
+parse_conditional_expression :: proc(p: ^Parser) -> (node: Conditional_Expression, err: Parsing_Error) {
     condition_tokens: [dynamic]Token
     for {
         token := parser_advance(p)
@@ -441,6 +498,31 @@ parse_conditional_expression :: proc(p: ^Parser, keyword_token: Token) -> (node:
 }
 
 
+parse_loop_expression :: proc(p: ^Parser) -> (node: Loop_Expression, err: Parsing_Error) {
+    next_token := parser_scan(p)
+    err = expect_token_type(next_token, .Identifier)
+    start := Literal {"0", "u32"} // This automatically sets i to 0 but needs to be more flexible
+    parser_capture_variable(p, next_token.value, Scalar_Type{"u32"})
+    node.start = new_clone(start)
+
+    next_token = parser_scan(p)
+    err = expect_token_type(next_token, .Range_Operator)
+    if err != nil do return
+
+    next_token = parser_scan(p)
+    err = expect_token_type(next_token, .Literal)
+    end := Literal {next_token.value, "u32"}
+    node.end = new_clone(end)
+
+    next_token = parser_scan(p)
+    err = expect_token_type(next_token, .Open_Brace)
+
+    node.body, err = parse_block(p)
+    return
+}
+
+
+// Obviously should use this in the main parse()
 parse_block :: proc(p: ^Parser) -> (body: [dynamic]Expression, err: Parsing_Error){
     for {
         next_token := parser_scan(p)
@@ -452,12 +534,12 @@ parse_block :: proc(p: ^Parser) -> (body: [dynamic]Expression, err: Parsing_Erro
             append(&body, subnode)
         case .Conditional_Keyword: 
             subnode: Expression
-            subnode, err = parse_conditional_expression(p, next_token)
+            subnode, err = parse_conditional_expression(p)
             append(&body, subnode)
         case .For_Keyword: 
-            log.errorf("TODO: Implement parsing for %v", next_token.type)
-            err = .Unimplemented_Error
-            return
+            subnode: Expression
+            subnode, err = parse_loop_expression(p)
+            append(&body, subnode)
         case:
             log.errorf("Unexpected token: %v", next_token)
             err = .Syntax_Error
@@ -523,12 +605,12 @@ parse :: proc(token_stream: [dynamic]Token) -> (ast: [dynamic]AST_Node, err: Par
                 append(&body, subnode)
             case .Conditional_Keyword: 
                 subnode: Expression
-                subnode, err = parse_conditional_expression(&p, next_token)
+                subnode, err = parse_conditional_expression(&p)
                 append(&body, subnode)
             case .For_Keyword: 
-                log.errorf("TODO: Implement parsing for %v", next_token.type)
-                err = .Unimplemented_Error
-                return
+                subnode: Expression
+                subnode, err = parse_loop_expression(&p)
+                append(&body, subnode)
             case:
                 log.errorf("Unexpected token: %v", next_token)
                 err = .Syntax_Error

@@ -47,6 +47,9 @@ Token_Type :: enum {
     Greater_Than_Or_Equal_To_Operator,
     Equals_Operator,
     Not_Equal_Operator,
+    Range_Operator,
+    Increment_Operator,
+    Decrement_Operator,
 }
 
 
@@ -105,7 +108,8 @@ is_type :: proc(s: string) -> bool {
 
 is_builtin_variable :: proc(s: string) -> bool {
     switch s {
-    case "thread_idx.x", "tid.y", "tid.z", "ctaid.x", "ctaid.y", "ctaid.z", "ntid.x", "ntid.y", "ntid.z":
+    case "thread_idx.x", "thread_idx.y", "thread_idx.z", "thread.x", "thread.y", "thread.z", 
+        "ctaid.x", "ctaid.y", "ctaid.z", "ntid.x", "ntid.y", "ntid.z":
         return true
     }
     return false
@@ -193,13 +197,42 @@ split_tokens :: proc(data: []byte, at_eof: bool) -> (advance: int, token: []byte
         return
     }
 
+    // if is_alpha(r) || r == '_' {
+    //     end := start + width
+    //     for end < len(data) {
+    //         r, w := utf8.decode_rune(data[end:])
+    //         if !is_alpha(r) && !is_digit(r) && r != '.' && r != '_' do break
+    //         end += w
+    //     }
+    //     if end < len(data) && data[end] == '(' {
+    //         advance = end
+    //         token = data[start:end]
+    //         return
+    //     }
+    //     advance = end
+    //     token = data[start:end]
+    //     return
+    // }
+
     if is_alpha(r) || r == '_' {
         end := start + width
         for end < len(data) {
             r, w := utf8.decode_rune(data[end:])
-            if !is_alpha(r) && !is_digit(r) && r != '.' && r != '_' do break
+            if !is_alpha(r) && !is_digit(r) && r != '_' && r != '.' do break
+            if r == '.' {
+                // Check if it's a range operator
+                if end+1 < len(data) && data[end+1] == '.' {
+                    break
+                }
+                // Check if it's followed by 'x', 'y', or 'z' (for thread.x, etc.)
+                if end+1 < len(data) && (data[end+1] == 'x' || data[end+1] == 'y' || data[end+1] == 'z') {
+                    end += 2
+                    break
+                }
+            }
             end += w
         }
+        // Preserve the function call detection
         if end < len(data) && data[end] == '(' {
             advance = end
             token = data[start:end]
@@ -207,6 +240,13 @@ split_tokens :: proc(data: []byte, at_eof: bool) -> (advance: int, token: []byte
         }
         advance = end
         token = data[start:end]
+        return
+    }
+
+    // Handle the range operator separately
+    if r == '.' && len(data) > start+1 && data[start+1] == '.' {
+        advance = start + 2
+        token = data[start : start+2]
         return
     }
 
@@ -282,6 +322,12 @@ lex :: proc(reader_stream: io.Reader) -> [dynamic]Token {
             token = Token {.Equals_Operator, token_str}
         case token_str == "!=":
             token = Token {.Not_Equal_Operator, token_str}
+        case token_str == "..":
+            token = Token {.Range_Operator, token_str}
+        case token_str == "+=":
+            token = Token {.Increment_Operator, token_str}
+        case token_str == "-=":
+            token = Token {.Decrement_Operator, token_str}
 
         // Delimiters 
         case token_str == "(":
