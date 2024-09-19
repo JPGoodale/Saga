@@ -1,3 +1,1 @@
 # Saga
-
-The Saga Begins...
