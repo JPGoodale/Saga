@@ -11,7 +11,7 @@ main :: proc() {
 }
 
 
-rms_norm :: proc(input: [$N]f32, weight: [N]f32) -> (out: [N]f32,) {
+rmsnorm :: proc(input: [$N]f32, weight: [N]f32) -> (out: [N]f32,) {
     squared_sum: f32
     for i in 0..<N { 
         squared_sum += input[i] * input[i] 

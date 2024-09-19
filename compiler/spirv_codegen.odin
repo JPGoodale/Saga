@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:strings"
 import "core:strconv"
 import "core:c/libc"
+import "core:path/filepath"
 import rt "../runtime"
 
 // For better readability
@@ -103,7 +104,7 @@ generate_spirv_instruction:: proc(file_handle: os.Handle, ast_node: Instruction)
 }
 
 
-generate_spirv :: proc(ast: [dynamic]AST_Node) -> (binary_file: string, grid_layout: rt.Grid_Layout) {
+generate_spirv :: proc(ast: [dynamic]AST_Node, output_dir: string) -> (binary_file: string, grid_layout: rt.Grid_Layout) {
     ctx: Ctx
     for node in ast do parse_node(&ctx, node)
     grid_layout = rt.Grid_Layout {
@@ -111,9 +112,19 @@ generate_spirv :: proc(ast: [dynamic]AST_Node) -> (binary_file: string, grid_lay
         u32(atoi(ctx.grid_layout.y)), 
         u32(atoi(ctx.grid_layout.z))
     }
-    asm_file    := join({".\\spirv_files\\", ctx.module_name, ".spvasm"}, "")
-    o, err      := os.open(asm_file, os.O_WRONLY|os.O_CREATE, 0644)
+
+    // asm_file := join({".\\spirv_gen\\", ctx.module_name, ".spvasm"}, "")
+    // o, err := os.open(asm_file, os.O_WRONLY|os.O_CREATE, 0644)
+    // defer os.close(o)
+
+    asm_file := filepath.join([]string{output_dir, fmt.tprintf("%s.spvasm", ctx.module_name)})
+    o, err := os.open(asm_file, os.O_WRONLY|os.O_CREATE, 0o644)
+    if err != 0 {
+        fmt.printf("Error opening output file: %v\n", err)
+        return
+    }
     defer os.close(o)
+
     os.truncate(asm_file, 0)
     os.seek(o, 0, os.SEEK_END)
     generate_spirv_instruction(o, ctx.capability)
@@ -128,17 +139,23 @@ generate_spirv :: proc(ast: [dynamic]AST_Node) -> (binary_file: string, grid_lay
     for var in ctx.variables do generate_spirv_instruction(o, var)
     generate_spirv_instruction(o, ctx.kernel_function)
     generate_spirv_instruction(o, ctx.kernel_body_label)
+    for var in ctx.local_variables do generate_spirv_instruction(o, var)
     generate_spirv_instruction(o, ctx.loads[0])
     for comp in ctx.composites do generate_spirv_instruction(o, comp)
     for chain in ctx.access_chains do generate_spirv_instruction(o, chain)
-    for load in ctx.loads[1:] do generate_spirv_instruction(o, load)
     for op in ctx.operations do generate_spirv_instruction(o, op)
-    for store in ctx.stores do generate_spirv_instruction(o, store)
     generate_spirv_instruction(o, ctx.kernel_return)
     generate_spirv_instruction(o, ctx.kernel_function_end)
-    cmd := clone_to_cstring(join({".\\spirv_files\\assemble.bat", asm_file}, " "))
+
+    // cmd := clone_to_cstring(join({".\\spirv_gen\\assemble.bat", asm_file}, " "))
+    // libc.system(cmd)
+    // binary_file = join({".\\spirv_gen\\", ctx.module_name, ".spv"}, "")
+    //
+    assemble_script := filepath.join({output_dir, "assemble.bat"})
+    cmd := strings.clone_to_cstring(fmt.tprintf("%s %s", assemble_script, asm_file))
     libc.system(cmd)
-    binary_file = join({".\\spirv_files\\", ctx.module_name, ".spv"}, "")
+    
+    binary_file = filepath.join({output_dir, fmt.tprintf("%s.spv", ctx.module_name)})
     return
 }
 
