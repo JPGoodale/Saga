@@ -1,12 +1,12 @@
-module vector_mul
+module rmsnorm
 
 
-GRID_LAYOUT    :: [1, 1, 1]
-BLOCK_LAYOUT   :: [1024, 1, 1]
+GRID_LAYOUT    :: [8, 1, 1]
+BLOCK_LAYOUT   :: [512, 1, 1]
 
 
-main :: kernel(out: [1024]f32, input: [1024]f32, weight: [1024]f32, n: u32) {
-    if thread.x < n {
+main :: kernel(out: []f32, input: []f32, weight: []f32, n: u32) {
+    for i in 0..n; i += 32 {
         out[thread.x] = weight[thread.x] * input[thread.x]
     }
 }
