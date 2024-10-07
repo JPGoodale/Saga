@@ -1,6 +1,7 @@
 package saga_compiler
 import "core:fmt"
 import "core:strings"
+import pp "../tools/pretty_printer"
 
 
 AST_Node :: union {
@@ -9,15 +10,17 @@ AST_Node :: union {
     Constant_Assignment,
     Kernel_Signature,
     Argument,
-    Array_Argument,
-    Scalar_Argument,
     Kernel,
     Expression,
+    Variable_Expression,
     Value,
+    Identifier,
     Literal,
     Type,
     Scalar_Type,
-    Array_Type
+    Array_Type,
+    Thread_Idx,
+    Thread
 }
 
 
@@ -46,21 +49,9 @@ Kernel_Signature :: struct {
 }
 
 
-Argument :: union {
-    Array_Argument,
-    Scalar_Argument
-}
-
-
-Array_Argument :: struct {
+Argument :: struct {
     name: string,
-    type: Array_Type,
-}
-
-
-Scalar_Argument :: struct {
-    name: string,
-    type: Scalar_Type,
+    type: Type
 }
 
 
@@ -93,10 +84,12 @@ Expression :: union {
     Binary_Expression,
     Conditional_Expression,
     Loop_Expression,
-    Call_Expression,
-    Value,
+    Unary_Call_Expression,
+    Binary_Call_Expression,
+    Identifier,
     Literal,
-    Thread_Idx
+    Thread_Idx,
+    Thread
 }
 
 
@@ -107,10 +100,10 @@ Variable_Declaration :: struct {
 
 
 Variable_Expression :: struct {
-    name:       string,
-    thread_id:  Thread_Idx,
-    type:       Type,
-    value:      ^Expression,
+    name:           string,
+    thread_idx:     Thread_Idx,
+    type:           Type,
+    value:          ^Expression,
 }
 
 
@@ -127,27 +120,37 @@ Conditional_Expression :: struct {
 }
 
 
-// Need to adjust this so that the start and stop can be variables as well
 Loop_Expression :: struct {
-    start:  ^Literal,
-    end:    ^Literal,
+    start:  Value,
+    end:    Value,
     body:   [dynamic]Expression
 
 }
 
 
-Call_Expression :: struct {
-    callee: string,
-    args:   [dynamic]Value,
+Unary_Call_Expression :: struct {
+    callee:     string,
+    operand:    ^Expression,
 }
 
 
-Value :: struct {
-    value:          string,
-    thread_id:      Thread_Idx,
-    type:           Type,
+Binary_Call_Expression :: struct {
+    callee:     string,
+    operands:   [2]^Expression,
 }
 
+
+Value :: union {
+    Identifier,
+    Literal,
+}
+
+
+Identifier :: struct {
+    name:       string,
+    type:       Type,
+    thread_idx: Thread_Idx
+}
 
 // Only scalar literals are supported atm
 Literal :: struct {
@@ -166,106 +169,178 @@ Thread :: struct {
     value: string
 }
 
-// TODO: Needs refactored.. does not look very nice on the console
+
 print_node :: proc(node: AST_Node, indent: int = 0) {
     indent_str := strings.repeat(" ", indent)
     
     #partial switch n in node {
     case Module:
-        fmt.printf("%sModule: %s\n", indent_str, n.name)
+        pp.printf("%sModule: ", indent_str, color = .Yellow)
+        pp.printf("%s\n", n.name, color = .White)
     case Layout:
-        fmt.printf("%sLayout: (%s, %s, %s)\n", indent_str, n.x, n.y, n.z)
+        pp.printf("%sLayout: ", indent_str, color = .Yellow)
+        pp.printf("[%s, %s, %s]\n", n.x, n.y, n.z, color = .White)
     case Constant_Assignment:
-        fmt.printf("%sConstant: %s = %s\n", indent_str, n.name, n.value)
+        pp.printf("%sConstant: ", indent_str, color = .Green)
+        pp.printf("%s = %s\n", n.name, n.value, color = .White)
     case Kernel:
-        fmt.printf("%sKernel:\n", indent_str)
+        pp.printf("%sKernel:\n", indent_str, color = .Yellow)
         print_node(n.signature, indent + 2)
-        fmt.printf("%sKernel Body:\n", indent_str)
+        pp.printf("%s  Kernel Body:\n", indent_str, color = .Yellow)
         for expr in n.body {
-            print_node(expr, indent + 2)
+            print_node(expr, indent + 4)
         }
     case Kernel_Signature:
-        fmt.printf("%sKernel Signature: %s\n", indent_str, n.name)
+        pp.printf("%sKernel Signature: ", indent_str, color = .Yellow)
+        pp.printf("%s\n", n.name, color = .White)
         if len(n.args) > 0 {
-            fmt.printf("%s  Arguments (%d):\n", indent_str, len(n.args))
+            pp.printf("%s  Arguments (%d):\n", indent_str, len(n.args), color = .Green)
             for arg in n.args {
                 print_node(arg, indent + 4)
             }
         } else {
-            fmt.printf("%s  WARNING: No arguments in kernel signature\n", indent_str)
+            pp.printf("%s  WARNING: No arguments in kernel signature\n", indent_str, color = .Bright_Red)
         }
-    case Array_Argument:
-        fmt.printf("%sArray Arg: %s %v\n", indent_str, n.name, n.type)
-    case Scalar_Argument:
-        fmt.printf("%sScalar Arg: %s %v\n", indent_str, n.name, n.type)
+    case Argument:
+        pp.printf("%sArg: ", indent_str, color = .Cyan)
+        pp.printf("%s ", n.name, color = .White)
+        print_node(n.type, 0)
+        fmt.println()
     case Expression:
-        switch e in n {
+        #partial switch e in n {
         case Variable_Declaration:
-            fmt.printf("%sVariable: %v, %v\n", indent_str, e.name, e.type)
+            pp.printf("%sVariable: ", indent_str, color = .Green)
+            pp.printf("%v, ", e.name, color = .White)
+            print_node(e.type, 0)
         case Variable_Expression:
-            fmt.printf("%sVariable: %s, %v, %v\n", indent_str, e.name, e.thread_id, e.type)
-            if e.value != nil {
-                fmt.printf("%s  Value:\n", indent_str)
-                print_node(e.value^, indent + 4)
-            }
+            pp.printf("%sVariable: ", indent_str, color = .Cyan)
+            pp.printf("%s, ", e.name, color = .White)
+            print_node(e.type, 0)
+            print_node(e.thread_idx, 0)
+            pp.printf("%s  Value: ", indent_str, color = .Green)
+            fmt.println()
+            print_node(e.value^, indent + 4)
         case Binary_Expression:
-            fmt.printf("%sBinary Op: %s\n", indent_str, e.op)
-            fmt.printf("%s  Left:\n", indent_str)
+            pp.printf("%sBinary Op: ", indent_str, color = .Cyan)
+            pp.printf("%s\n", e.op, color = .Bright_Red)
+            pp.printf("%s  Left:\n", indent_str, color = .Green)
             print_node(e.lhs^, indent + 4)
-            fmt.printf("%s  Right:\n", indent_str)
+            pp.printf("%s  Right:\n", indent_str, color = .Green)
             print_node(e.rhs^, indent + 4)
         case Conditional_Expression:
-            fmt.printf("%sConditional:\n", indent_str)
-            fmt.printf("%s  Condition:\n", indent_str)
+            pp.printf("%sConditional:\n", indent_str, color = .Cyan)
+            pp.printf("%s  Condition:\n", indent_str, color = .Green)
             print_node(e.condition^, indent + 4)
-            fmt.printf("%s  Body:\n", indent_str)
+            pp.printf("%s  Body:\n", indent_str, color = .Green)
             for expr in e.body {
                 print_node(expr, indent + 4)
             }
         case Loop_Expression:
-            fmt.printf("%sLoop:\n", indent_str)
-            fmt.printf("%s  Start:\n", indent_str)
-            print_node(e.start^, indent + 4)
-            fmt.printf("%s  End:\n", indent_str)
-            print_node(e.end^, indent + 4)
-            fmt.printf("%s  Body:\n", indent_str)
+            pp.printf("%sLoop:\n", indent_str, color = .Cyan)
+            pp.printf("%s  Start:\n", indent_str, color = .Green)
+            print_node(e.start, indent + 4)
+            pp.printf("%s  End:\n", indent_str, color = .Green)
+            print_node(e.end, indent + 4)
+            pp.printf("%s  Body:\n", indent_str, color = .Green)
             for expr in e.body {
                 print_node(expr, indent + 4)
             }
-        case Call_Expression:
-            fmt.printf("%sFunction Call: %s\n", indent_str, e.callee)
-            fmt.printf("%s  Arguments:\n", indent_str)
-            for arg in e.args {
-                print_node(arg, indent + 4)
+        case Unary_Call_Expression:
+            pp.printf("%sFunction Call: ", indent_str, color = .Cyan)
+            pp.printf("%s\n", e.callee, color = .White)
+            pp.printf("%s  Operand:\n", indent_str, color = .Green)
+            print_node(e.operand^, indent + 4)
+        case Binary_Call_Expression:
+            pp.printf("%sFunction Call: ", indent_str, color = .Cyan)
+            pp.printf("%s\n", e.callee, color = .White)
+            pp.printf("%s  Operands:\n", indent_str, color = .Cyan)
+            for operand in e.operands {
+                print_node(operand^, indent + 4)
             }
-        case Value:
-            fmt.printf("%sValue: %s, %v, %v\n", indent_str, e.value, e.thread_id, e.type)
+        case Identifier:
+            pp.printf("%sIdentifier: ", indent_str, color = .Cyan)
+            pp.printf("%s, ", e.name, color = .White)
+            print_node(e.type, 0)
+            if e.thread_idx != nil {
+                switch t in e.thread_idx {
+                case Thread:
+                    pp.printf("Thread_Idx: ", color = .Green)
+                    pp.printf("%v", t.value, color = .Bright_Red)
+                    fmt.println()
+                case Binary_Expression:
+                    fmt.println()
+                    print_node(e.thread_idx, indent + 2)
+                case:
+                    fmt.println()
+                    print_node(e.thread_idx, indent + 2)
+                }
+            }
         case Literal:
-            fmt.printf("%sValue: %v, %v\n", indent_str, e.value, e.type)
-        case Thread_Idx:
-            switch t in e {
-            case Thread:
-                fmt.printf("%sValue: %v\n", indent_str, t)
-            case Binary_Expression:
-                fmt.printf("%sBinary Op: %s\n", indent_str, t.op)
-                fmt.printf("%s  Left:\n", indent_str)
-                print_node(t.lhs^, indent + 4)
-                fmt.printf("%s  Right:\n", indent_str)
-                print_node(t.rhs^, indent + 4)
-            }
+            pp.printf("%sLiteral: ", indent_str, color = .Cyan)
+            pp.printf("%v, ", e.value, color = .White)
+            pp.printf("Type: ", color = .Green)
+            pp.printf("%v", e.type, color = .Bright_Red)
+            fmt.println()
+        case Thread:
+            pp.printf("%sThread_Idx: ", indent_str, color = .Cyan)
+            pp.printf("%v\n", e.value, color = .Bright_Red)
         }
     case Type:
         switch t in n {
         case Scalar_Type:
-            fmt.printf("%sScalar Type: %s\n", indent_str, t.variant)
+            pp.printf("%sType: ", indent_str, color = .Green)
+            pp.printf("%s\n", t.variant, color = .Bright_Red)
         case Array_Type:
-            fmt.printf("%sArray Type: %s[%s]\n", indent_str, t.element_type, t.n_elements)
+            pp.printf("%sType: ", indent_str, color = .Green)
+            pp.printf("%v", t.element_type, color = .Bright_Red)
+            pp.printf("[%s], ", t.n_elements, color = .Bright_Red)
         }
+    case Thread_Idx:
+        switch t in n {
+        case Thread:
+            pp.printf("%sThread_Idx: ", indent_str, color = .Green)
+            pp.printf("%v\n", t.value, color = .Bright_Red)
+        case Binary_Expression:
+            pp.printf("%sThread_Idx:\n", indent_str, color = .Green)
+            e: Expression = t
+            print_node(e, indent + 4)
+        }
+    case Value:
+        switch t in n {
+        case Identifier:
+            print_node(t, indent)
+        case Literal:
+            print_node(t, indent)
+        }
+    case Identifier:
+        pp.printf("%sIdentifier: ", indent_str, color = .Cyan)
+        pp.printf("%s, ", n.name, color = .White)
+        print_node(n.type, 0)
+        if n.thread_idx != nil {
+            switch t in n.thread_idx {
+            case Thread:
+                pp.printf(", Thread_Idx: ", color = .Green)
+                pp.printf("%v", t.value, color = .Bright_Red)
+                fmt.println()
+            case Binary_Expression:
+                fmt.println()
+                print_node(n.thread_idx, indent + 2)
+            case:
+                fmt.println()
+                print_node(n.thread_idx, indent + 2)
+            }
+        }
+    case Literal:
+        pp.printf("%sLiteral: ", indent_str, color = .Cyan)
+        pp.printf("%v, ", n.value, color = .White)
+        pp.printf("Type: ", color = .Green)
+        pp.printf("%v", n.type, color = .Bright_Red)
+        fmt.println()
     case:
-        fmt.printf("%sUnknown node type: %v\n", indent_str, n)
+        pp.printf("%sUnknown node type: %v", indent_str, n, color = .Bright_Red)
+        pp.printf("%v\n", n, color = .Bright_Red)
     }
 }
-
 
 print_ast :: proc(ast: [dynamic]AST_Node) {
     for node in ast {
@@ -274,3 +349,9 @@ print_ast :: proc(ast: [dynamic]AST_Node) {
     }
 }
 
+print_ast_simple :: proc(ast: [dynamic]AST_Node) {
+    for node in ast {
+        fmt.println(node)
+        fmt.println() 
+    }
+}
