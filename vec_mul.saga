@@ -1,0 +1,13 @@
+module vec_mul
+
+
+BLOCKS  :: [8, 1, 1]
+THREADS :: [128, 1, 1]
+
+
+main :: kernel(out: [1024]f32, input: [1024]f32, weight: [1024]f32, n: u32) {
+    if thread.x < n {
+        out[thread.x] = weight[thread.x] * input[thread.x]
+    }
+}
+
