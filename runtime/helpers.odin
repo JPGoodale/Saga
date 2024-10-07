@@ -18,3 +18,7 @@ print_results_f32 :: proc(N: int, out: [dynamic]f32) {
     for i:=0; i < N; i+=1 do fmt.printf("%v ", out[i]) 
 }
 
+
+_print_results_f32 :: proc(N: int, out: []f32) {
+    for i:=0; i < N; i+=1 do fmt.printf("%v ", out[i]) 
+}
