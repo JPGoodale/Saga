@@ -1,13 +1,17 @@
-package saga_compiler
+package spirv
 import "core:fmt"
 import "core:log"
 import "core:strings"
 import "core:strconv"
-import saga "../"
+import sagac "../../frontend"
+
+replace_all :: strings.replace_all
+contains    :: strings.contains
+atof        :: strconv.atof
 
 
 Ctx :: struct {
-    grid_layout:            saga.Layout,
+    grid_layout:            sagac.Layout,
     module_name:            string,
 
     capability:             OpCapability,
@@ -119,7 +123,7 @@ create_local_variable :: proc(ctx: ^Ctx, name: string, type_id: Id, storage_clas
 }
 
 
-create_storage_buffer :: proc(ctx: ^Ctx, node: saga.Array_Type, element_type_name: string) -> (storage_buffer_id: Id) {
+create_storage_buffer :: proc(ctx: ^Ctx, node: sagac.Array_Type, element_type_name: string) -> (storage_buffer_id: Id) {
     if !(element_type_name in ctx.storage_buf_ptr_map) {
         pointer                                     : OpTypePointer
         pointer.result                              = create_result_id({"%_ptr_StorageBuffer_", element_type_name})
@@ -222,7 +226,7 @@ create_storage_buffer :: proc(ctx: ^Ctx, node: saga.Array_Type, element_type_nam
 }
 
 
-create_workgroup_buffer :: proc(ctx: ^Ctx, node: saga.Array_Type, element_type_name: string) -> (workgroup_buffer_id: Id) {
+create_workgroup_buffer :: proc(ctx: ^Ctx, node: sagac.Array_Type, element_type_name: string) -> (workgroup_buffer_id: Id) {
     if !(element_type_name in ctx.workgroup_buf_ptr_map) {
         pointer                                     : OpTypePointer
         pointer.result                              = create_result_id({"%_ptr_Workgroup_", element_type_name})
@@ -265,7 +269,7 @@ set_memory_model :: proc(ctx: ^Ctx) {
 }
 
 
-translate_module :: proc(ctx: ^Ctx, node: saga.Module) {
+translate_module :: proc(ctx: ^Ctx, node: sagac.Module) {
     set_capability(ctx)
     set_extensions(ctx)
     set_memory_model(ctx)
@@ -273,7 +277,7 @@ translate_module :: proc(ctx: ^Ctx, node: saga.Module) {
 }
 
 
-translate_layout :: proc(ctx: ^Ctx, node: saga.Layout) {
+translate_layout :: proc(ctx: ^Ctx, node: sagac.Layout) {
     if node.is_grid {
         ctx.grid_layout = node
         return
@@ -326,13 +330,13 @@ translate_layout :: proc(ctx: ^Ctx, node: saga.Layout) {
 }
 
 
-translate_kernel :: proc(ctx: ^Ctx, node: saga.Kernel) {
+translate_kernel :: proc(ctx: ^Ctx, node: sagac.Kernel) {
     translate_kernel_signature(ctx, node.signature)
     translate_kernel_body(ctx, node.body)
 }
 
 
-translate_kernel_signature :: proc(ctx: ^Ctx, node: saga.Kernel_Signature) {
+translate_kernel_signature :: proc(ctx: ^Ctx, node: sagac.Kernel_Signature) {
     entry_point                         : OpEntryPoint
     entry_point.execution_model         = .GLCompute
     entry_point.entry_point             = create_id({"%", node.name})
@@ -366,10 +370,10 @@ translate_kernel_signature :: proc(ctx: ^Ctx, node: saga.Kernel_Signature) {
 }
 
 
-translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]saga.Argument) {
+translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]sagac.Argument) {
     for node, idx in nodes {
         switch t in node.type {
-        case Array_Type:
+        case sagac.Array_Type:
             arg_name_id := create_id({"%", node.name})
             append(&ctx.arg_name_ids, arg_name_id)
 
@@ -396,7 +400,7 @@ translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]saga.Argument) {
             variable.storage_class          = .StorageBuffer
             append(&ctx.variables, variable)
         
-        case Scalar_Type:
+        case sagac.Scalar_Type:
             arg_name_id := create_id({"%", node.name})
             append(&ctx.arg_name_ids, arg_name_id)
 
@@ -442,7 +446,7 @@ translate_kernel_args :: proc(ctx: ^Ctx, nodes: [dynamic]saga.Argument) {
 }
 
 
-translate_kernel_body :: proc(ctx: ^Ctx, nodes: [dynamic]saga.Expression) {
+translate_kernel_body :: proc(ctx: ^Ctx, nodes: [dynamic]sagac.Expression) {
     block_label             : OpLabel
     block_label.result      = auto_cast("%body")
     ctx.kernel_body_label   = block_label
@@ -450,26 +454,26 @@ translate_kernel_body :: proc(ctx: ^Ctx, nodes: [dynamic]saga.Expression) {
 }
 
 
-translate_block :: proc(ctx: ^Ctx, nodes: [dynamic]saga.Expression) {
+translate_block :: proc(ctx: ^Ctx, nodes: [dynamic]sagac.Expression) {
     for node, idx in nodes {
         #partial switch n in node {
-        case Variable_Declaration:
+        case sagac.Variable_Declaration:
             translate_variable_declaration(ctx, n)
-        case Variable_Expression:
+        case sagac.Variable_Expression:
             #partial switch e in n.value {
-            case Binary_Expression:
+            case sagac.Binary_Expression:
                 translate_binary_expression(ctx, n, e) 
             // case Unary_Call_Expression:
             //     translate_call_expression(ctx, n, e)
-            case Literal:
+            case sagac.Literal:
                 translate_value_assignment(ctx, n, e)
-            case Identifier:
+            case sagac.Identifier:
                 translate_value_assignment(ctx, n, e)
             case:
                 fmt.println(n)
                 log.error("I'm afraid that this expression is not supported at this time.. a pity, tisn't it?")
             }
-        case Conditional_Expression:
+        case sagac.Conditional_Expression:
             translate_conditional_expression(ctx, n)
         // case Loop_Expression:
         //     translate_loop_expression(ctx, n)
@@ -482,14 +486,14 @@ translate_block :: proc(ctx: ^Ctx, nodes: [dynamic]saga.Expression) {
 
 
 // This and the proc below could probably be consolidated..
-translate_variable_declaration :: proc(ctx: ^Ctx, node: saga.Variable_Declaration) {
+translate_variable_declaration :: proc(ctx: ^Ctx, node: sagac.Variable_Declaration) {
     switch t in node.type {
-    case Array_Type:
+    case sagac.Array_Type:
         element_type_name   := translate_scalar_type(ctx, t.element_type)
         workgroup_buffer_id := create_workgroup_buffer(ctx, t, element_type_name)
         variable_id         := create_local_variable(ctx, node.name, workgroup_buffer_id, .Workgroup)
 
-    case Scalar_Type:
+    case sagac.Scalar_Type:
         type_name := translate_scalar_type(ctx, t.variant)
 
         pointer                         : OpTypePointer
@@ -504,9 +508,9 @@ translate_variable_declaration :: proc(ctx: ^Ctx, node: saga.Variable_Declaratio
 
 
 // This and the proc above could probably be consolidated..
-translate_value_assignment :: proc(ctx: ^Ctx, root_node: saga.Variable_Expression, node: saga.Expression) {
+translate_value_assignment :: proc(ctx: ^Ctx, root_node: sagac.Variable_Expression, node: sagac.Expression) {
     #partial switch n in node {
-    case Literal:
+    case sagac.Literal:
         type_name := translate_scalar_type(ctx, n.type)
 
         pointer                         : OpTypePointer
@@ -518,12 +522,12 @@ translate_value_assignment :: proc(ctx: ^Ctx, root_node: saga.Variable_Expressio
         constant_id := create_constant(ctx, type_name, n.value)
         variable_id := create_local_variable(ctx, root_node.name, auto_cast(pointer.result), .Function, constant_id)
 
-    case Identifier:
+    case sagac.Identifier:
         type_name: string
         switch t in n.type {
-        case Array_Type:
+        case sagac.Array_Type:
             type_name = translate_scalar_type(ctx, t.n_elements) 
-        case Scalar_Type:
+        case sagac.Scalar_Type:
             type_name = translate_scalar_type(ctx, t.variant) 
         }
 
@@ -564,11 +568,11 @@ translate_value_assignment :: proc(ctx: ^Ctx, root_node: saga.Variable_Expressio
 }
 
 
-translate_conditional_expression :: proc(ctx: ^Ctx, node: saga.Conditional_Expression) {
+translate_conditional_expression :: proc(ctx: ^Ctx, node: sagac.Conditional_Expression) {
     #partial switch condition in node.condition {
-    case Literal, Identifier:
+    case sagac.Literal, sagac.Identifier:
         log.error("Not handled yet")
-    case Binary_Expression:
+    case sagac.Binary_Expression:
         _condition, _ := translate_binary_expression(ctx, node, condition, true)
 
         selection_merge                     : OpSelectionMerge
@@ -709,40 +713,40 @@ translate_conditional_expression :: proc(ctx: ^Ctx, node: saga.Conditional_Expre
 // }
 
 
-translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_node: saga.Binary_Expression, is_subexpr: bool = false) -> (result_id: Id, type: string) {
+translate_binary_expression :: proc(ctx: ^Ctx, root_node: sagac.Expression, op_node: sagac.Binary_Expression, is_subexpr: bool = false) -> (result_id: Id, type: string) {
     // -----------------------------------------------------------------------------------
     // Left-Hand-Side
 
-    lhs_node:       Identifier
+    lhs_node:       sagac.Identifier
     lhs_load_id:    Id
     lhs_pointer_id: Id
 
     #partial switch node in op_node.lhs^ {
-    case Thread_Idx:
+    case sagac.Thread_Idx:
         switch n in node {
-        case Thread:
+        case sagac.Thread:
             lhs_value, _        := strings.replace_all(n.value, ".", "_")
             lhs_id              := create_id({"%", lhs_value})
             lhs_max_thread_id   := translate_thread_id(ctx, node)
             lhs_load_id         = auto_cast(lhs_max_thread_id)
-        case Binary_Expression:
+        case sagac.Binary_Expression:
             log.error("Not yet!") // Do we even need to handle this??
         }
-    case Thread:
+    case sagac.Thread:
         // We need some way of converting scientific notation literals to decimal
         lhs_value, _        := strings.replace_all(node.value, ".", "_")
         lhs_id              := create_id({"%", lhs_value})
         lhs_max_thread_id   := translate_thread_id(ctx, node)
         lhs_load_id         = auto_cast(lhs_max_thread_id)
 
-    case Literal:
+    case sagac.Literal:
         type_name := translate_scalar_type(ctx, node.type)
         lhs_load_id = create_constant(ctx, type_name, node.value)
 
-    case Identifier:
+    case sagac.Identifier:
         lhs_node = node
         #partial switch t in node.type {
-        case Array_Type:
+        case sagac.Array_Type:
             lhs_id                          := create_id({"%", lhs_node.name})
             lhs_max_thread_id               := translate_thread_id(ctx, lhs_node.thread_idx)
             lhs_element_type                := translate_scalar_type(ctx, t.element_type)
@@ -775,7 +779,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
 
             lhs_load_id = auto_cast(lhs_load.result)
 
-        case Scalar_Type:
+        case sagac.Scalar_Type:
             lhs_id                          := create_id({"%", lhs_node.name})
             lhs_max_thread_id               := translate_thread_id(ctx, lhs_node.thread_idx)
             lhs_element_type                := translate_scalar_type(ctx, t.variant)
@@ -816,7 +820,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
     //     lhs_id                          := create_id({"%", lhs_node.name})
     //     lhs_max_thread_id               := translate_thread_id(ctx, lhs_node.thread_idx)
     //     // We are assuming the operand to be an array here
-    //     lhs_element_type                := translate_scalar_type(ctx, lhs_node.type.(Array_Type).element_type) 
+    //     lhs_element_type                := translate_scalar_type(ctx, lhs_node.type.(sagac.Array_Type).element_type) 
     //
     //     if lhs_id in ctx.arg_scalar_type_map {
     //         lhs_access_chain                : OpAccessChain
@@ -847,7 +851,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
     //     lhs_load_id = auto_cast(lhs_load.result)
     //     lhs_load_id = _translate_call_expression(ctx, node, lhs_element_type, lhs_load_id)
 
-    case Binary_Expression:
+    case sagac.Binary_Expression:
         lhs_load_id, type = translate_binary_expression(ctx, root_node, node, true)
 
     case:
@@ -857,35 +861,35 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
     // -----------------------------------------------------------------------------------
     // Right-Hand-Side
 
-    rhs_node:       Identifier
+    rhs_node:       sagac.Identifier
     rhs_load_id:    Id
     rhs_pointer_id: Id
     // type:           string
 
     #partial switch node in op_node.rhs^ {
-    case Thread_Idx:
+    case sagac.Thread_Idx:
         switch n in node {
-        case Thread:
+        case sagac.Thread:
             rhs_value, _            := strings.replace_all(n.value, ".", "_")
             rhs_id                  := create_id({"%", rhs_value})
             rhs_max_thread_id       := translate_thread_id(ctx, node)
             rhs_load_id             = auto_cast(rhs_max_thread_id)
-        case Binary_Expression:
+        case sagac.Binary_Expression:
             log.error("Not yet!") // Do we even need to handle this??
         }
 
-    case Literal:
+    case sagac.Literal:
         type_name := translate_scalar_type(ctx, node.type)
         rhs_load_id = create_constant(ctx, type_name, node.value)
         // type = auto_cast(constant.result_type)
 
-    case Identifier:
+    case sagac.Identifier:
         rhs_node            = node
         rhs_id              := create_id({"%", rhs_node.name})
         rhs_max_thread_id   := translate_thread_id(ctx, rhs_node.thread_idx)
 
         #partial switch t in node.type {
-        case Array_Type:
+        case sagac.Array_Type:
             rhs_element_type := translate_scalar_type(ctx, t.element_type)
 
             if rhs_id in ctx.arg_scalar_type_map {
@@ -917,7 +921,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
             rhs_load_id = auto_cast(rhs_load.result)
             type = string(rhs_load.result_type)
 
-        case Scalar_Type:
+        case sagac.Scalar_Type:
             rhs_element_type := translate_scalar_type(ctx, t.variant)
 
             if rhs_id in ctx.arg_scalar_type_map {
@@ -956,7 +960,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
     //     rhs_id                          := create_id({"%", rhs_node.name})
     //     rhs_max_thread_id               := translate_thread_id(ctx, rhs_node.thread_idx)
     //     // We are assuming the operand to be an array here
-    //     rhs_element_type                := translate_scalar_type(ctx, rhs_node.type.(Array_Type).element_type) 
+    //     rhs_element_type                := translate_scalar_type(ctx, rhs_node.type.(sagac.Array_Type).element_type) 
     //
     //     if rhs_id in ctx.arg_scalar_type_map {
     //         rhs_access_chain                : OpAccessChain
@@ -988,7 +992,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
     //     rhs_load_id = _translate_call_expression(ctx, node, rhs_element_type, rhs_load_id)
     //     type = string(rhs_load.result_type)
 
-    case Binary_Expression:
+    case sagac.Binary_Expression:
         rhs_load_id, type = translate_binary_expression(ctx, root_node, node, true)
 
     case:
@@ -1006,7 +1010,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
 
     if !(is_subexpr) {
         #partial switch n in root_node {
-        case Variable_Expression:
+        case sagac.Variable_Expression:
 
             result_name_id                  := create_id({"%", n.name})
             result_max_thread_id            := translate_thread_id(ctx, n.thread_idx)
@@ -1050,7 +1054,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
 //     operand_node                        := expr_node.operand
 //     operand_id                          := create_id({"%", operand_node.name})
 //     operand_max_thread_id               := translate_thread_id(ctx, operand_node.thread_idx)
-//     operand_element_type                := ctx.scalar_type_map[operand_node.type.(Array_Type).element_type] // Assuming that the operand is an array
+//     operand_element_type                := ctx.scalar_type_map[operand_node.type.(sagac.Array_Type).element_type] // Assuming that the operand is an array
 //     operand_pointer_id                  : Id
 //     operand_load_id                     : Id
 //
@@ -1093,7 +1097,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
 //     // Result
 //     result_name_id                  := create_id({"%", root_node.name})
 //     result_max_thread_id            := translate_thread_id(ctx, root_node.thread_idx)
-//     result_element_type             := ctx.scalar_type_map[root_node.type.(Array_Type).element_type] // Assuming that the operand is an array
+//     result_element_type             := ctx.scalar_type_map[root_node.type.(sagac.Array_Type).element_type] // Assuming that the operand is an array
 //     result_pointer_id               : Id
 //
 //     if result_name_id in ctx.arg_scalar_type_map { // A bit of a hacky way to see if we need an access chain
@@ -1135,7 +1139,7 @@ translate_binary_expression :: proc(ctx: ^Ctx, root_node: saga.Expression, op_no
 // }
 
 
-translate_binary_op :: proc(ctx: ^Ctx, node: saga.Binary_Expression, type: string, lhs_load_id, rhs_load_id: Id) -> (result: Result_Id) {
+translate_binary_op :: proc(ctx: ^Ctx, node: sagac.Binary_Expression, type: string, lhs_load_id, rhs_load_id: Id) -> (result: Result_Id) {
     ctx.binary_op_counter += 1
     switch type {
     case "%int8", "%int16", "%int32", "%int64":
@@ -1565,9 +1569,9 @@ translate_scalar_type :: proc(ctx: ^Ctx, t: string) -> (type_name: string) {
 }
 
 
-translate_thread_id :: proc(ctx: ^Ctx, thread_id: saga.Thread_Idx) -> (max_thread_id: Id){
+translate_thread_id :: proc(ctx: ^Ctx, thread_id: sagac.Thread_Idx) -> (max_thread_id: Id){
     switch t in thread_id {
-    case Thread:
+    case sagac.Thread:
         if t.value in ctx.thread_id_map {
             max_thread_id = auto_cast(ctx.thread_id_map[t.value])
             return
@@ -1609,20 +1613,20 @@ translate_thread_id :: proc(ctx: ^Ctx, thread_id: saga.Thread_Idx) -> (max_threa
             }
             else {log.error("Not found!")}
         }
-    case Binary_Expression:
-        max_thread_id, _ = translate_binary_expression(ctx, Expression{}, t, true) // Not actually a subexpr but life is hard
+    case sagac.Binary_Expression:
+        max_thread_id, _ = translate_binary_expression(ctx, sagac.Expression{}, t, true) // Not actually a subexpr but life is hard
     }
     return
 }
 
 
-parse_node :: proc(ctx: ^Ctx, node: saga.AST_Node) {
+parse_node :: proc(ctx: ^Ctx, node: sagac.AST_Node) {
     #partial switch n in node {
-    case Module:
+    case sagac.Module:
         translate_module(ctx, n)
-    case Layout:
+    case sagac.Layout:
         translate_layout(ctx, n)
-    case Kernel:
+    case sagac.Kernel:
         translate_kernel(ctx, n)
     case:
         fmt.println()
@@ -1630,7 +1634,7 @@ parse_node :: proc(ctx: ^Ctx, node: saga.AST_Node) {
 }
 
 // Desparately out of date
-walk_ast :: proc(ast: [dynamic]saga.AST_Node) {
+walk_ast :: proc(ast: [dynamic]sagac.AST_Node) {
     ctx: Ctx
     for node in ast do parse_node(&ctx, node)
     fmt.println()

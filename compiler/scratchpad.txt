@@ -1,0 +1,48 @@
+matmul :: compute_kernel(m, n, k: u32) {
+    // Define our tile sizes based on hardware properties
+    block := {
+        m = 8 * hw.warp_size,    // 256
+        n = 8 * hw.warp_size,    // 256
+        k = hw.bank_size / 4     // 8 - for efficient bank access
+    }
+    
+    thread := {
+        count = 256,  // 8 warps
+        elements = 8  // 8x8 per thread
+    }
+
+    // Stage 1: Load into shared memory
+    load :: {
+        // Each thread loads 4 elements at a time (vector load)
+        tile A[block.m, block.k] from global {
+            for bx := 0..m/block.m for by := 0..k/block.k {
+                load_vec4(thread.x * 4, thread.y * 4)
+            }
+        }
+        
+        tile B[block.k, block.n] from global {
+            for bx := 0..k/block.k for by := 0..n/block.n {
+                load_vec4(thread.x * 4, thread.y * 4)
+            }
+        }
+    }
+
+    // Stage 2: Compute
+    compute :: {
+        for k_step := 0..k/block.k {
+            // Each thread computes its 8x8 region
+            tile acc[thread.elements, thread.elements] {
+                acc += A[thread.x, k_step] * B[k_step, thread.y]
+            }
+        }
+    }
+
+    // Stage 3: Store result
+    store :: {
+        tile C[block.m, block.n] to global {
+            for bx := 0..m/block.m for by := 0..n/block.n {
+                store_vec4(thread.x * 4, thread.y * 4, acc)
+            }
+        }
+    }
+}

@@ -1,4 +1,4 @@
-package saga_compiler
+package spirv
 
 // NOTE: We are using the C UpperCamelCase conventions and keeping the redundent 'Op' prefix
 // for all Instruction nodes in order to distingush them from identically named non-Instruction 

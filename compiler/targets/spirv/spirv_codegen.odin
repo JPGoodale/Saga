@@ -1,11 +1,20 @@
-package saga_compiler
+package spirv
 import "core:os"
 import "core:fmt"
 import "core:strings"
 import "core:strconv"
 import "core:c/libc"
 import "core:path/filepath"
-import saga "../"
+import sagac "../../frontend"
+
+atoi :: strconv.atoi
+
+
+// Grid_Layout :: struct {
+//     x: u32,
+//     y: u32,
+//     z: u32
+// }
 
 
 Generic_Spirv_Node :: struct {
@@ -15,8 +24,15 @@ Generic_Spirv_Node :: struct {
 }
 
 
+write_to_file :: proc(file_handle: os.Handle, content: string) {
+    contents            := fmt.tprintf("%s\n", content)
+    bytes_written, err  := os.write(file_handle, transmute([]byte)contents)
+    if err != 0 do fmt.println("Error writing to file:", err)
+}
+
+
 generate_spirv_instruction:: proc(file_handle: os.Handle, ast_node: Instruction) {
-    using saga
+    using sagac
     generic_node: Generic_Spirv_Node
     #partial switch n in ast_node {
     case OpReturn, OpFunctionEnd:
@@ -81,10 +97,10 @@ generate_spirv_instruction:: proc(file_handle: os.Handle, ast_node: Instruction)
 }
 
 
-generate_spirv :: proc(ast: [dynamic]AST_Node, output_dir: string) -> (binary_file: string, grid_layout: vulkanrt.Grid_Layout) {
+generate_spirv :: proc(ast: [dynamic]sagac.AST_Node, output_dir: string) -> (binary_file: string, grid_layout: sagac.Grid_Layout) {
     ctx: Ctx
     for node in ast do parse_node(&ctx, node)
-    grid_layout = vulkanrt.Grid_Layout {
+    grid_layout = sagac.Grid_Layout {
         u32(atoi(ctx.grid_layout.x)), 
         u32(atoi(ctx.grid_layout.y)), 
         u32(atoi(ctx.grid_layout.z))

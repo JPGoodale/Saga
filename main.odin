@@ -11,6 +11,7 @@ import sagart "./runtime"
 
 main :: proc() {
     context.logger = log.create_console_logger()
-    spirv_file, grid_layout := sagac.compile("./hello.saga", "./spirv_gen/")
+    spirv_file, grid_layout := sagac.compile_spirv("./hello.saga", "./spirv_gen/")
+    // sagart.run(spirv_file, grid_layout)
 }
 

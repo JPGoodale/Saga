@@ -1,796 +1,1044 @@
 package saga_compiler
-import "core:log"
 import "core:fmt"
-import "core:strings"
-import "core:strconv"
-
+import "core:os"
 
 Parsing_Error :: enum {
-    Type_Error,
     Syntax_Error,
-    Unimplemented_Error
 }
-
 
 Parser :: struct {
-    token_stream:           [dynamic]Token,
-    current_token_number:   int,
-    variables:              map[string]Type
+    tokens:             []Token,
+    curr_token_index:   int,
+    curr_token:         Token,
+    prev_token:         Token,
+    curr_proc:          ^Ast_Node,
+    error_count:        int,
+    expr_level:         int,
+    allow_type:         bool,
 }
 
 
-parser_init :: proc(token_stream: [dynamic]Token) -> Parser {
-    return Parser{token_stream, 0, make(map[string]Type)}
+parser_init :: proc(tokens: []Token) -> Parser {
+    return Parser{
+        tokens = tokens,
+        curr_token = tokens[0],
+    }
 }
 
 
-parser_capture_variable :: proc(p: ^Parser, name: string, type: Type) {
-    p.variables[name] = type
+next_token :: proc(p: ^Parser) -> bool {
+    if p.curr_token_index + 1 < len(p.tokens) {
+        p.curr_token = p.tokens[p.curr_token_index + 1]
+        p.curr_token_index += 1
+        return true
+    }
+    syntax_error(p, "Unexpected end of file")
+    return false
 }
 
 
-parser_get_variable_type :: proc(p: ^Parser, name: string) -> (Type, bool) {
-    return p.variables[name]
+advance_token :: proc(p: ^Parser) -> Token {
+    prev := p.curr_token
+    p.prev_token = prev
+    next_token(p)
+    return prev
 }
 
 
-parser_infer_variable_type :: proc(p: ^Parser, name: string) -> (type: Type, value_type: string, err: Parsing_Error) {
-    found: bool
-    type, found = parser_get_variable_type(p, name)
-    if !found {
-        err = .Syntax_Error
-        log.errorf("Variable %s used before declaration", name)
+peek_token :: proc(p: ^Parser) -> Token {
+    if p.curr_token_index + 1 >= len(p.tokens) {
+        return Token{kind = .EOF}
+    }
+    return p.tokens[p.curr_token_index + 1]
+}
+
+
+expect_token :: proc(p: ^Parser, kind: Token_Kind) -> (prev: Token, err: Parsing_Error) {
+    prev = p.curr_token
+    if prev.kind != kind {
+        err = syntax_error(p, fmt.tprintf("Expected '%v', got '%v'", kind, prev.kind))
         return
     }
-    switch t in type {
-    case Array_Type:
-        value_type = t.element_type
-    case Scalar_Type:
-        value_type = t.variant
+    advance_token(p)
+    return
+}
+
+
+allow_token :: proc(p: ^Parser, kind: Token_Kind) -> bool {
+    prev := p.curr_token
+    if prev.kind == kind {
+        advance_token(p)
+        return true
     }
-    return
+    return false
 }
 
 
-parser_peek :: proc(p: ^Parser) -> (current_token: Token) {
-    if p.current_token_number >= len(p.token_stream) {
-        current_token = Token{.EOF, ""}
-        return
+is_literal_type :: proc(node: ^Ast_Node) -> bool {
+    #partial switch node.kind {
+    case .Bad_Expr, .Selector_Expr, .Call_Expr,
+        .Identifier, .Array_Type, .Dynamic_Array_Type, 
+        .Vector_Type, .Matrix_Type, .Tensor_Type:
+        return true
     }
-    current_token = p.token_stream[p.current_token_number]
-    return
+    return false
 }
 
 
-parser_advance :: proc(p: ^Parser) -> (current_token: Token) {
-    current_token = parser_peek(p)
-    p.current_token_number += 1
-    return
-}
+// syntax_error :: proc(p: ^Parser, msg: string) -> Parsing_Error {
+//     p.error_count += 1
+//     fmt.eprintf("%v: error: %s\n", p.curr_token.pos, msg)
+//     return .Syntax_Error
+// }
 
-
-parser_scan :: proc(p: ^Parser) -> (current_token: Token) {
-    for parser_peek(p).type == .Newline {
-        p.current_token_number += 1
-    }
-    current_token = parser_advance(p)
-    return
-}
-
-
-expect_token_type :: proc(t: Token, expected: Token_Type, error_message: string = "") -> (err: Parsing_Error) {
-    if t.type != expected {
-        log.errorf("expected token type: %v got: %v", expected, t.type) 
-        log.error(error_message)
-        err = .Syntax_Error
-        return
-    }
-    return
-}
-
-
-parse_module_header :: proc(p: ^Parser) -> (node: Module, err: Parsing_Error) {
-    keyword_token := parser_scan(p)
-    expect_token_type(keyword_token, .Module_Keyword, "All Saga files must begin with the module keyword") or_return
-
-    name_token := parser_advance(p)
-    expect_token_type(name_token, .Identifier, "Module must have a name") or_return
-
-    node = Module{name_token.value} 
-    return
-}
-
-
-parse_layout :: proc(p: ^Parser, is_grid: bool = false) -> (node: Layout, err: Parsing_Error) {
-    op_token := parser_advance(p)
-    expect_token_type(op_token, .Constant_Assignment_Operator, "Layouts must be declared as constants") or_return
-
-    delimter_token := parser_advance(p)
-    expect_token_type(delimter_token, .Open_Bracket, "Layouts must be arrays") or_return
+syntax_error :: proc(p: ^Parser, msg: string) -> Parsing_Error {
+    p.error_count += 1
+    fmt.eprintf("(%v:%v): error: %s\n",
+        p.curr_token.pos.line, 
+        p.curr_token.pos.column, msg)
     
-    // x
-    value_token := parser_advance(p)
-    expect_token_type(value_token, .Integer_Literal, "Layout values must be unsigned integers") or_return
-
-    if value_token.value == "0" { 
-        log.errorf("Layout values must be greater than or equal to 1")
-        err = .Syntax_Error
-        return
+    if p.error_count > 50 {
+        os.exit(1)
     }
-    if err != nil do return
-
-    node.x = value_token.value
-
-    delimter_token = parser_advance(p)
-    expect_token_type(delimter_token, .Comma, "Layout must contain both x, y and z values. Perhaps you forgot a comma?") or_return
     
-    // y
-    value_token = parser_advance(p)
-    expect_token_type(value_token, .Integer_Literal, "Layout values must be unsigned integers") or_return
-
-    if value_token.value == "0" { 
-        log.errorf("Layout values must be greater than or equal to 1")
-        err = .Syntax_Error
-        return
+    for p.curr_token.kind != .EOF {
+        #partial switch p.curr_token.kind {
+        case .Semicolon, .Close_Brace:
+            advance_token(p)
+            return .Syntax_Error
+        }
+        advance_token(p)
     }
-    if err != nil do return
-
-    node.y = value_token.value
-
-    delimter_token = parser_advance(p)
-    expect_token_type(delimter_token, .Comma, "Layout must contain both x, y and z values. Perhaps you forgot a comma?") or_return
     
-    // z
-    value_token = parser_advance(p)
-    expect_token_type(value_token, .Integer_Literal, "Layout values must be unsigned integers") or_return
+    return .Syntax_Error
+}
 
-    if value_token.value == "0" { 
-        log.errorf("Layout values must be greater than or equal to 1")
-        err = .Syntax_Error
-        return
+
+// No polymorphism for now
+parse_identifier :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    token := p.curr_token
+    if token.kind == .Identifier {
+        advance_token(p)
+    } else {
+        token.value = "_"
+        expect_token(p, .Identifier) or_return
     }
-    if err != nil do return
-
-    node.z = value_token.value
-
-    delimter_token = parser_advance(p)
-    expect_token_type(delimter_token, .Close_Bracket, "Perhaps you forgot a closing bracket") or_return
-
-    node.is_grid = is_grid
+    node = ast_identifier(token)
     return
 }
 
 
-// NOTE: We could consider allowing the values of file scope constants to be expressions if we include 
-// a constant folding pass, however, I prefer the contents of a Saga file to be restricted what will 
-// actually be ran on the device...
-parse_initial_identifier :: proc(p: ^Parser, name_token: Token) -> (node: AST_Node, err: Parsing_Error) {
-    op_token := parser_scan(p)
-    expect_token_type(op_token, .Constant_Assignment_Operator, "Only constant, kernel and procedure declarations are allowed at file scope") or_return
-
-    value_token := parser_advance(p)
-
-    #partial switch value_token.type {
-    case .Float_Literal, .Integer_Literal, .Boolean_Literal:
-        node = Constant_Assignment {name_token.value, value_token.value}
-        return
-    case .Kernel_Keyword:
-        delimiter_token := parser_advance(p)
-        expect_token_type(delimiter_token, .Open_Parenthese, "Missing parenthese after kernel keyword") or_return
-
-        args, err := parse_kernel_args(p)
-        node = Kernel_Signature{name_token.value, args}
-        return
-    case .Procedure_Keyword:
-        log.errorf("Coming soon to a compiler near you!")
-        err = .Unimplemented_Error
-        return
-    case:
-        log.errorf("Program must begin with either constant, kernel or procedure declarations")
-        err = .Syntax_Error
-        return
+parse_value :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    if p.curr_token.kind == .Open_Brace {
+        return parse_compound_literal(p, nil)
     }
+    return parse_expr(p, false)
 }
 
 
-parse_kernel_args :: proc(p: ^Parser) -> (nodes: [dynamic]Argument, err: Parsing_Error) {
-    nodes = make([dynamic]Argument)
-    for {
-        name_token := parser_scan(p)
-        if name_token.type == .Close_Parenthese do break
-        expect_token_type(name_token, .Identifier) or_return
+parse_compound_literal :: proc(p: ^Parser, type: ^Ast_Node) -> (node: ^Ast_Node, err: Parsing_Error) {
+    elems: [dynamic]^Ast_Node
+    open := expect_token(p, .Open_Brace) or_return
+    expr_level := p.expr_level
+    p.expr_level = 0
+    if p.curr_token.kind != .Close_Brace {
+        elems = parse_element_list(p) or_return
+    }
+    p.expr_level = expr_level
+    close := expect_token(p, .Close_Brace) or_return
+    node = ast_compound_literal(type, elems[:], open, close);
+    return
+}
 
-        delimiter_token := parser_advance(p)
-        expect_token_type(delimiter_token, .Colon) or_return
 
-        type: Type
-        type_token := parser_advance(p)
-        #partial switch type_token.type {
-        case .Array_Type:
-            type = parse_array_type(type_token.value) or_return
-        case .Scalar_Type:
-            type = Scalar_Type{type_token.value}
-        case:
-            log.errorf("Expected token of either %v or %v, got %v", Token_Type.Array_Type, Token_Type.Scalar_Type, type_token.type)
-            log.error("Kernel Arguments must be statically typed")
-            err = .Syntax_Error
-            return
+parse_element_list :: proc(p: ^Parser) -> (elems: [dynamic]^Ast_Node, err: Parsing_Error) {
+    for p.curr_token.kind != .Close_Brace && p.curr_token.kind != .EOF {
+        elem := parse_value(p) or_return
+        if p.curr_token.kind == .Eq {
+            eq := expect_token(p, .Eq) or_return
+            value := parse_value(p) or_return
+            elem = ast_field_value(elem, value, eq)
         }
-
-        node := Argument{name_token.value, type}
-        append(&nodes, node)
-        parser_capture_variable(p, node.name, type)
-
-        delimiter_token = parser_advance(p)
-        if delimiter_token.type == .Close_Parenthese do break
-        expect_token_type(delimiter_token, .Comma) or_return
+        append(&elems, elem)
+        if p.curr_token.kind != .Comma do break
+        advance_token(p)
     }
     return
 }
 
 
-parse_array_type :: proc(type_string: string) -> (node: Array_Type, err: Parsing_Error) {
-    end_index: int
-    for rune, idx in type_string {
-        if rune == ']' {
-           end_index = idx 
+parse_field_list :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    start_token := p.curr_token
+    params: [dynamic]^Ast_Node
+    
+    for p.curr_token.kind != .Close_Paren && p.curr_token.kind != .EOF {
+        names: [dynamic]^Ast_Node
+        
+        first_name_token := expect_token(p, .Identifier) or_return
+        first_name := ast_identifier(first_name_token)
+        append(&names, first_name)
+        
+        for p.curr_token.kind == .Comma {
+            advance_token(p)
+            if p.curr_token.kind == .Colon do break
+            next_name_token := expect_token(p, .Identifier) or_return
+            next_name := ast_identifier(next_name_token)
+            append(&names, next_name)
         }
-    } 
-    // If array type has more than one dimension, i.e. [128x128]f32, we flatten it
-    // Though we might want to refactor this for more dimension aware algorithms
-    found, idx := contains_at(type_string, "x") 
-    if found {
-        n := atoi(type_string[1:idx]) * atoi(type_string[idx+1:end_index])
-        node.n_elements = fmt.tprint(n)
+
+        expect_token(p, .Colon) or_return
+        type := parse_type(p) or_return
+        
+        param := ast_field(names[:], type, first_name_token)
+        append(&params, param)
+
+        if p.curr_token.kind != .Comma do break
+        advance_token(p)
     }
-    else {
-        node.n_elements = type_string[1:end_index]
-    }
-    node.element_type = type_string[end_index+1:]
+    expect_token(p, .Close_Paren) or_return
+    node = ast_field_list(params[:], start_token)
     return
 }
 
 
-parse_thread_idx :: proc(p: ^Parser) -> (node: Thread_Idx, err: Parsing_Error) {
-    value_token := parser_advance(p)
-    thread := Thread{value_token.value}
+parse_type_or_ident :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    prev_allow_type := p.allow_type
+    prev_expr_level := p.expr_level
 
-    next_token := parser_advance(p)
-    #partial switch next_token.type {
-    case .Close_Bracket:
-        node = thread
-        return
-    case .Addition_Operator, .Subtraction_Operator, 
-         .Multiplication_Operator, .Division_Operator,
-         .Modulo_Operator, .Remainder_Operator:
+    defer p.allow_type = prev_allow_type
+    defer p.expr_level = prev_expr_level
 
-        operator := next_token.value
+    p.allow_type = true
+    p.expr_level = -1
 
-        lhs: Expression
-        lhs = thread
-
-        rhs: Expression
-        rhs = parse_expression(p, "u32") or_return
-
-        #partial switch expr in rhs {
-        case Binary_Expression:
-            if operator_precedence(expr.op) < operator_precedence(operator) {
-                _lhs:  Expression = Binary_Expression{operator, new_clone(lhs), expr.lhs}
-                _rhs: ^Expression = expr.rhs
-                node = Binary_Expression{expr.op, new_clone(_lhs), _rhs}
-                parser_advance(p)
-                return
-            }
-        }
-
-        node = Binary_Expression{operator, new_clone(lhs), new_clone(rhs)}
-        parser_advance(p)
-        return
-    case:
-        log.errorf("Invalid expression.") 
-        err = .Syntax_Error
-        return
-    }
+    lhs := true
+    operand := parse_operand(p, lhs) or_return
+    return parse_atom_expr(p, operand, lhs)
 }
 
 
-parse_expression :: proc(p: ^Parser, context_type: string) -> (node: Expression, err: Parsing_Error) {
-    lhs: Expression
-    value_token := parser_advance(p)
+parse_type :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) { 
+   node = parse_type_or_ident(p) or_return
+   if node == nil {
+       prev_token := p.curr_token
+       token: Token
+       if p.curr_token.kind == .Open_Brace {
+           token = p.curr_token
+       } else {
+           token = advance_token(p)
+       }
+        err = syntax_error(p, "Expected a type")
+        node = ast_bad_expr(token, p.curr_token)
+        return 
+   } 
+   return
+}
 
-    #partial switch value_token.type {
-    case .Unary_Builtin_Function:
-        lhs = parse_unary_builtin_function(p, value_token.value) or_return
-    case .Binary_Builtin_Function:
-        lhs = parse_binary_builtin_function(p, value_token.value) or_return
-    case .Builtin:
-        lhs = Thread{value_token.value}
-    case .Float_Literal, .Integer_Literal:
-        lhs = Literal{value_token.value, context_type}
+
+parse_proc_type :: proc(p: ^Parser, varient: Proc_Varient, token: Token) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    expect_token(p, .Open_Paren) or_return
+    p.expr_level += 1
+    params := parse_field_list(p) or_return
+    p.expr_level -= 1
+    results: ^Ast_Node
+    if p.curr_token.kind != .Right_Arrow {
+        results = nil
+    } else {
+        advance_token(p)
+        results = parse_results(p) or_return
+    }
+    node = ast_procedure_type(params, results, varient, token)
+    return 
+}
+
+
+parse_results :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    prev_level := p.expr_level
+    defer p.expr_level = prev_level
+
+    if p.curr_token.kind != .Open_Paren {
+        begin_token := p.curr_token
+        empty_names: []^Ast_Node
+        list: [dynamic]^Ast_Node
+        type := parse_type(p) or_return
+        append(&list, ast_field(empty_names, type, begin_token))
+        node = ast_field_list(list[:], begin_token)
+        return
+    }
+    expect_token(p, .Open_Paren) or_return
+    return parse_field_list(p) 
+}
+
+
+parse_body :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    prev_expr_level := p.expr_level
+    defer p.expr_level = prev_expr_level
+    p.expr_level = 0
+    open := expect_token(p, .Open_Brace) or_return
+    stmts := parse_stmt_list(p) or_return
+    close := expect_token(p, .Close_Brace) or_return
+    node = ast_block_stmt(stmts[:], open, close)
+    return
+}
+
+
+parse_operand :: proc(p: ^Parser, lhs: bool) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    node = nil
+    #partial switch p.curr_token.kind {
     case .Identifier:
-        type, value_type := parser_infer_variable_type(p, value_token.value) or_return
-        thread_idx: Thread_Idx = nil
-        if parser_peek(p).type == .Open_Bracket {
-            parser_advance(p) 
-            thread_idx = parse_thread_idx(p) or_return
-        }
-        lhs = Identifier{value_token.value, type, thread_idx}
-    }
+        return parse_identifier(p)
 
-    op_token := parser_peek(p)
-    #partial switch op_token.type {
-    case .Addition_Operator, .Subtraction_Operator, 
-         .Multiplication_Operator, .Division_Operator,
-         .Modulo_Operator, .Remainder_Operator,
-         .Less_Than_Operator, .Less_Than_Or_Equal_To_Operator,
-         .Greater_Than_Operator, .Greater_Than_Or_Equal_To_Operator,
-         .Equals_Operator, .Not_Equal_Operator,
-         .Left_Shift_Operator, .Right_Shift_Operator,
-         .And_Operator, .Or_Operator, 
-         .Bitwise_Or_Operator, .Bitwise_Xor_Operator,
-         .Bitwise_And_Operator, .Bitwise_And_Not_Operator:
-
-        operator := op_token.value
-        parser_advance(p)
-
-        rhs: Expression
-        rhs = parse_expression(p, context_type) or_return
-
-        #partial switch expr in rhs {
-        case Binary_Expression:
-            if operator_precedence(expr.op) < operator_precedence(operator) {
-                _lhs:  Expression = Binary_Expression{operator, new_clone(lhs), expr.lhs}
-                _rhs: ^Expression = expr.rhs
-                node = Binary_Expression{expr.op, new_clone(_lhs), _rhs}
-                return
-            }
-        }
-
-        node = Binary_Expression{operator, new_clone(lhs), new_clone(rhs)}
+    case .Integer, .Float, .Imaginary:
+        node = ast_basic_literal(advance_token(p))
         return
-    case .Newline, .Open_Brace, .Close_Bracket:
-        node = lhs
-        return
-    case:
-        log.errorf("Invalid expression.") 
-        err = .Syntax_Error
-        return
-    }
-}
 
-
-operator_precedence :: proc(op: string) -> int {
-    switch op {
-    case "||":
-        return 1
-    case "&&":
-        return 2
-    case "==", "!=", "<", "<=", ">", ">=":
-        return 3
-    case "|":
-        return 4
-    case "~":
-        return 5
-    case "&":
-        return 6
-    case "<<", ">>":
-        return 7
-    case "+", "-":
-        return 8
-    case "*", "/", "%", "%%":
-        return 9
-    case "&~":
-        return 10
-    case "!":
-        return 11
-    case:
-        return 0
-    }
-}
-
-
-parse_unary_builtin_function :: proc(p: ^Parser, callee: string) -> (node: Unary_Call_Expression, err: Parsing_Error) {
-    delimiter_token := parser_advance(p)
-    expect_token_type(delimiter_token, .Open_Parenthese, "Function call must have parentheses") or_return
-
-    operand: Expression
-    value_token := parser_advance(p)
-    #partial switch value_token.type {
-    case .Integer_Literal, .Float_Literal:
-        operand = Literal{value_token.value, "f32"}
-    case .Identifier:
-        type, value_type := parser_infer_variable_type(p, value_token.value) or_return
-
-        if !is_float(value_type) {
-            log.errorf("%v function requires a float operand, got type: %v", callee, value_type)
-            err = .Type_Error
-            return
-        }
-
-        thread_idx: Thread_Idx = nil
-        if parser_peek(p).type == .Open_Bracket {
-            parser_advance(p) 
-            thread_idx = parse_thread_idx(p) or_return
-        }
-
-        operand = Identifier{value_token.value, type, thread_idx}
-
-    case .Unary_Builtin_Function:
-        log.errorf("Coming soon to a compiler near you!")
-        err = .Unimplemented_Error
-        return
-    case .Binary_Builtin_Function:
-        log.errorf("Coming soon to a compiler near you!")
-        err = .Unimplemented_Error
-        return
-    case:
-        log.errorf("Invalid expression.") 
-        err = .Syntax_Error
-        return
-    }
-
-    delimiter_token = parser_advance(p)
-    expect_token_type(delimiter_token, .Close_Parenthese, "Function call must have parentheses") or_return
-
-    node = Unary_Call_Expression{callee, new_clone(operand)}
-    return
-}
-
-
-parse_binary_builtin_function :: proc(p: ^Parser, callee: string) -> (node: Binary_Call_Expression, err: Parsing_Error) {
-    delimter_token := parser_advance(p)
-    expect_token_type(delimter_token, .Open_Parenthese, "Function call must have parentheses") or_return
-
-    operands: [2]^Expression
-    for i in 0..<2 {
-        value_token := parser_advance(p)
-
-        #partial switch value_token.type {
-        case .Float_Literal:
-            operand: Expression = Literal{value_token.value, "f32"}
-            operands[i] = new_clone(operand)
-        case .Integer_Literal:
-            operand: Expression = Literal{value_token.value, "i32"}
-            operands[i] = new_clone(operand)
-        case .Identifier:
-            type, value_type := parser_infer_variable_type(p, value_token.value) or_return
-
-            thread_idx: Thread_Idx = nil
-            if parser_peek(p).type == .Open_Bracket {
-                parser_advance(p) 
-                thread_idx = parse_thread_idx(p) or_return
-            }
-
-            operand: Expression = Identifier{value_token.value, type, thread_idx}
-            operands[i] = new_clone(operand)
-
-        case .Unary_Builtin_Function:
-            log.errorf("Coming soon to a compiler near you!")
-            err = .Unimplemented_Error
-            return
-        case .Binary_Builtin_Function:
-            log.errorf("Coming soon to a compiler near you!")
-            err = .Unimplemented_Error
-            return
-        case:
-            log.errorf("Invalid expression.") 
-            err = .Syntax_Error
-            return
-        }
-
-        delimiter_token := parser_advance(p)
-        if i == 0 {
-            expect_token_type(delimiter_token, .Comma, "Binary functions require two operands.. Perhaps you forgot a comma?") or_return
-        } else {
-            expect_token_type(delimiter_token, .Close_Parenthese, "Binary functions only have two operands.. Perhaps you forgot a closing parenthese?") or_return
-        }
-    }
-
-    // TODO: Make sure operand types match
-
-    node = Binary_Call_Expression{callee, operands}
-    return
-}
-
-
-parse_variable_expression :: proc(p: ^Parser, name_token: Token) -> (node: Expression, err: Parsing_Error) {
-    next_token := parser_advance(p)
-
-    #partial switch next_token.type {
-    case .Open_Bracket:
-        thread_index := parse_thread_idx(p) or_return
-
-        op_token := parser_advance(p)
-        expect_token_type(op_token, .Variable_Assignment_Operator) or_return
-        type, value_type := parser_infer_variable_type(p, name_token.value) or_return
-
-        value := parse_expression(p, value_type) or_return
-        node = Variable_Expression{name_token.value, thread_index, type, new_clone(value)}
-        return
-    case .Colon:
-        type: Type
-        value_type: string
-        type_token := parser_advance(p)
-
-        #partial switch type_token.type {
-        case .Array_Type:
-            array_type := parse_array_type(type_token.value) or_return
-            type = array_type
-            value_type = array_type.element_type
-        case .Scalar_Type:
-            type = Scalar_Type{type_token.value}
-            value_type = type_token.value
-        case:
-            log.errorf("Invalid expression.") 
-            err = .Syntax_Error
-            return
-        }
-
-        if parser_peek(p).type == .Newline {
-            node = Variable_Declaration{name_token.value, type}
-            parser_capture_variable(p, name_token.value, type)
-            return
-        }
-
-        op_token := parser_advance(p)
-        expect_token_type(op_token, .Variable_Assignment_Operator) or_return
-
-        value := parse_expression(p, value_type) or_return
-
-        node = Variable_Expression{name_token.value, nil, type, new_clone(value)}
-        parser_capture_variable(p, name_token.value, type)
-        return
-    case .Variable_Assignment_Operator:
-        type, value_type := parser_infer_variable_type(p, name_token.value) or_return
-        value := parse_expression(p, value_type) or_return
-        node = Variable_Expression{name_token.value, nil, type, new_clone(value)}
-        return
-    case .Constant_Assignment_Operator:
-        log.errorf("All constants must be declared outside of kernel.") 
-        err = .Syntax_Error
-        return
-    case:
-        log.errorf("Invalid expression.") 
-        err = .Syntax_Error
-        return
-    }
-}
-
-
-parse_conditional_expression :: proc(p: ^Parser) -> (node: Conditional_Expression, err: Parsing_Error) {
-    expr := parse_condition(p) or_return
-    node.condition = new_clone(expr)
-
-    delimter_token := parser_advance(p)
-    expect_token_type(delimter_token, .Open_Brace) or_return
-
-    node.body, err = parse_block(p)
-    return
-}
-
-// NOTE: Can't give proper type errors here, might need a pass for that
-parse_condition :: proc(p: ^Parser) -> (node: Expression, err: Parsing_Error) {
-    lhs: Expression
-    value_token := parser_advance(p)
-
-    #partial switch value_token.type {
-    case .Unary_Builtin_Function:
-        lhs = parse_unary_builtin_function(p, value_token.value) or_return
-    case .Binary_Builtin_Function:
-        lhs = parse_binary_builtin_function(p, value_token.value) or_return
-    case .Builtin:
-        lhs = Thread{value_token.value}
-    case .Float_Literal:
-        lhs = Literal{value_token.value, "f32"}
-    case .Integer_Literal:
-        lhs = Literal{value_token.value, "i32"}
-    case .Identifier:
-        type, value_type := parser_infer_variable_type(p, value_token.value) or_return
-        thread_idx: Thread_Idx = nil
-        if parser_peek(p).type == .Open_Bracket {
-            parser_advance(p) 
-            thread_idx = parse_thread_idx(p) or_return
-        }
-        lhs = Identifier{value_token.value, type, thread_idx}
-    }
-
-    op_token := parser_peek(p)
-    #partial switch op_token.type {
-    case .Less_Than_Operator, .Less_Than_Or_Equal_To_Operator,
-         .Greater_Than_Operator, .Greater_Than_Or_Equal_To_Operator,
-         .Equals_Operator, .Not_Equal_Operator:
-
-        operator := op_token.value
-        parser_advance(p)
-
-        rhs: Expression
-        rhs = parse_expression(p, "u32") or_return
-
-        #partial switch expr in rhs {
-        case Binary_Expression:
-            #partial switch t in expr.rhs {
-            case Binary_Expression:
-                // This is dumbest shit I have ever done.
-                comparison_op_map := make(map[string]bool)
-                comparison_op_map["<"]  = true
-                comparison_op_map[">"]  = true
-                comparison_op_map["<="] = true
-                comparison_op_map[">="] = true
-                comparison_op_map["=="] = true
-                comparison_op_map["!="] = true
-                if !(t.op in comparison_op_map) {
-                    log.errorf("Invalid expression.") 
-                    err = .Syntax_Error
-                    return
-                }
-            case:
-                // TODO: Make sure that rhs is a boolean value
-            }
-
-            if operator_precedence(expr.op) < operator_precedence(operator) {
-                _lhs:  Expression = Binary_Expression{operator, new_clone(lhs), expr.lhs}
-                _rhs: ^Expression = expr.rhs
-                node = Binary_Expression{expr.op, new_clone(_lhs), _rhs}
-                return
-            }
-        }
-
-        node = Binary_Expression{operator, new_clone(lhs), new_clone(rhs)}
-        return
     case .Open_Brace:
-        #partial switch value_token.type {
-        case .Boolean_Literal:
-            node = Literal{value_token.value, "bool"}
+        if !lhs do return parse_compound_literal(p, nil)
+
+    case .Open_Paren:
+        prev_expr_level: int
+        open, close: Token
+
+        open = expect_token(p, .Open_Paren) or_return
+        if (p.prev_token.kind == .Close_Paren) {
+            close = expect_token(p, .Close_Paren) or_return
+            err = syntax_error(p, "Invalid parentheses expression with no inside expression");
+            node = ast_bad_expr(open, close)
             return
-        case .Identifier:
-            type, value_type := parser_infer_variable_type(p, value_token.value) or_return
-            #partial switch t in type {
-            case Scalar_Type:
-                switch {
-                case t.variant == "bool":
-                    node = Identifier{value_token.value, t, nil}
-                    return
-                case:
-                    log.errorf("Invalid expression.") 
-                    err = .Syntax_Error
-                    return
-                }
-            case:
-                log.errorf("Invalid expression.") 
-                err = .Syntax_Error
+        }
+
+        prev_expr_level = p.expr_level
+        p.expr_level = max(p.expr_level, 0) + 1
+        operand := parse_expr(p, false) or_return
+        p.expr_level = prev_expr_level
+
+        close = expect_token(p, .Close_Paren) or_return
+        node = ast_paren_expr(operand, open, close)
+        return
+    
+    case .Kernel:
+        token := expect_token(p, .Kernel) or_return
+        type := parse_proc_type(p, .Compute_Shader, token) or_return
+        curr_proc := p.curr_proc
+        p.curr_proc = type
+        body := parse_body(p) or_return
+        p.curr_proc = curr_proc;
+        node = ast_procedure_literal(type, body, token);
+        return 
+
+    // TODO: Differentiate between vertex and fragment shader types
+    case .Shader:
+        token := expect_token(p, .Shader) or_return
+        type := parse_proc_type(p, .Fragment_Shader, token) or_return
+        curr_proc := p.curr_proc
+        p.curr_proc = type
+        body := parse_body(p) or_return
+        p.curr_proc = curr_proc;
+        node = ast_procedure_literal(type, body, token);
+        return
+
+    case .Proc:
+        token := expect_token(p, .Proc) or_return
+        type := parse_proc_type(p, .Basic_Procedure, token) or_return
+        curr_proc := p.curr_proc
+        p.curr_proc = type
+        body := parse_body(p) or_return
+        p.curr_proc = curr_proc
+        node = ast_procedure_literal(type, body, token)
+        return
+
+    case .Pointer:
+        token := expect_token(p, .Pointer) or_return
+        elem := parse_type(p) or_return
+        node = ast_pointer_type(elem, token)
+        return
+        
+    case .Open_Bracket:
+        token := expect_token(p, .Open_Bracket) or_return
+        size_expr: ^Ast_Node
+        if p.curr_token.kind == .Pointer {
+            expect_token(p, .Pointer) or_return
+            expect_token(p, .Close_Bracket) or_return
+            type := parse_type(p) or_return
+            node = ast_multi_pointer_type(type, token)
+            return
+        }
+        else if p.curr_token.kind == .Dynamic {
+            expect_token(p, .Close_Bracket) or_return
+            type := parse_type(p) or_return
+            node = ast_dynamic_array_type(type, token)
+            return
+        }
+        else if p.curr_token.kind != .Close_Bracket {
+            p.expr_level += 1
+            size_expr = parse_expr(p, false) or_return
+            p.expr_level -= 1
+        }
+        expect_token(p, .Close_Bracket) or_return
+        type := parse_type(p) or_return
+        node = ast_array_type(size_expr, type, token)
+        return
+
+    case .Vec:
+        token := expect_token(p, .Vec) or_return
+        node = ast_vector_type(token)
+        return
+
+    case .Matrix:
+        token := expect_token(p, .Matrix) or_return
+        open := expect_token(p, .Open_Bracket) or_return
+
+        if p.curr_token.kind == .Dynamic {
+            expect_token(p, .Dynamic) or_return
+            expect_token(p, .Close_Bracket) or_return
+            type := parse_type(p) or_return
+            node = ast_dynamic_matrix_type(type, token)
+            return
+        }
+        row_count := parse_expr(p, true) or_return
+        expect_token(p, .Comma) or_return
+        column_count := parse_expr(p, true) or_return
+        expect_token(p, .Close_Bracket) or_return
+        elem_type := parse_type(p) or_return
+        node = ast_matrix_type(row_count, column_count, elem_type, true, token) // Assuming row-major for now
+        return
+
+    case .Tensor:
+        token := expect_token(p, .Tensor) or_return
+        open := expect_token(p, .Open_Bracket) or_return
+
+        if p.curr_token.kind == .Dynamic {
+            expect_token(p, .Dynamic) or_return
+            expect_token(p, .Close_Bracket) or_return
+            type := parse_type(p) or_return
+            node = ast_dynamic_tensor_type(type, token)
+            return
+        }
+
+        dims: [dynamic]^Ast_Node
+        for p.curr_token.kind != .Close_Bracket {
+            expr := parse_expr(p, true) or_return
+            append(&dims, expr)
+            if p.curr_token.kind != .Comma do break
+            advance_token(p)
+        }
+        expect_token(p, .Close_Bracket) or_return
+
+        strides: [dynamic]^Ast_Node
+        if p.curr_token.kind == .Open_Paren {
+            open = expect_token(p, .Open_Paren) or_return
+            for p.curr_token.kind != .Close_Paren {
+                expr := parse_expr(p, true) or_return
+                append(&strides, expr)
+                if p.curr_token.kind != .Comma do break
+                advance_token(p)
+            }
+            close := expect_token(p, .Close_Paren) or_return
+            if len(strides) != len(dims) {
+                err = syntax_error(p, "Number of strides must match number of tensor dimensions");
+                node = ast_bad_expr(open, close)
                 return
             }
-        case:
-            log.errorf("Invalid expression.") 
-            err = .Syntax_Error
-            return
+        } else {
+            for i in 0..<len(dims) {
+                one_token := Token{.Integer, 1, token.pos}
+                one_node := ast_basic_literal(one_token)
+                append(&strides, one_node)
+            }
         }
-    case:
-        log.errorf("Invalid expression.") 
-        err = .Syntax_Error
-        return
-    }
-}
-
-
-parse_loop_expression :: proc(p: ^Parser) -> (node: Loop_Expression, err: Parsing_Error) {
-    name_token := parser_scan(p)
-    expect_token_type(name_token, .Identifier, "Expected an index identifier") or_return
-
-    parser_capture_variable(p, name_token.value, Scalar_Type{"u32"})
-
-    keyword_token := parser_scan(p)
-    expect_token_type(keyword_token, .In_Keyword, "Missing an 'in' keyword for loop expression") or_return
-
-    value_token := parser_scan(p)
-    #partial switch value_token.type {
-    case .Identifier:
-        parser_infer_variable_type(p, value_token.value) or_return
-        node.start = Identifier{value_token.value, Scalar_Type{"u32"}, nil}
-    case .Integer_Literal, .Float_Literal:
-        node.start = Literal{value_token.value, "u32"}
-    case:
-        log.errorf("Expected a scalar value for start index of loop but got: %v \n", value_token.value)
-        err = .Syntax_Error
+        elem_type := parse_type(p) or_return
+        node = ast_tensor_type(dims[:], strides[:], elem_type, token)
         return
     }
 
-    op_token := parser_scan(p)
-    expect_token_type(op_token, .Range_Operator, "Missing a range operator for loop expression") or_return
-
-    value_token = parser_scan(p)
-    #partial switch value_token.type {
-    case .Identifier:
-        parser_infer_variable_type(p, value_token.value) or_return
-        node.end = Identifier{value_token.value, Scalar_Type{"u32"}, nil}
-    case .Integer_Literal, .Float_Literal:
-        node.end = Literal{value_token.value, "u32"}
-    case:
-        log.errorf("Expected a scalar value for end index of loop but got: %v \n", value_token.value)
-        err = .Syntax_Error
-        return
-    }
-
-    delimiter_token := parser_scan(p)
-    expect_token_type(delimiter_token, .Open_Brace) or_return
-
-    node.body, err = parse_block(p)
     return
 }
 
 
-parse_block :: proc(p: ^Parser) -> (body: [dynamic]Expression, err: Parsing_Error){
+parse_atom_expr :: proc(p: ^Parser, operand: ^Ast_Node, lhs: bool) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    operand := operand
+    lhs     := lhs
+    if operand == nil {
+        if p.allow_type do return nil, nil
+        err = syntax_error(p, "Expected an operand")
+        operand = ast_bad_expr(p.curr_token, p.curr_token)
+    }
+    loop := true
+    for loop {
+        #partial switch p.curr_token.kind {
+        case .Open_Paren:
+            operand = parse_call_expr(p, operand) or_return
+
+        case .Period:
+            token := advance_token(p)
+            if p.curr_token.kind != .Identifier {
+                err = syntax_error(p, "Expected a selector")
+                return
+            } else {
+                id := parse_identifier(p) or_return
+                operand = ast_selector_expr(operand, id, token)
+            }
+
+        case .Open_Bracket:
+            indices: [dynamic]^Ast_Node
+            interval: Token
+
+            p.expr_level += 1
+            open := p.prev_token
+            expect_token(p, .Open_Bracket) or_return
+
+            for p.curr_token.kind != .Close_Bracket && p.curr_token.kind != .EOF {
+                expr := parse_expr(p, false) or_return
+                append(&indices, expr)
+                if p.curr_token.kind != .Close_Bracket{
+                    interval = advance_token(p)
+                }
+            }
+
+            p.expr_level -= 1
+            close := expect_token(p, .Close_Bracket) or_return
+
+            switch len(indices) {
+            case 0:
+                err = syntax_error(p, "Empty index expression")
+                operand = ast_bad_expr(open, close)
+                return operand, err
+            case 1: 
+                operand = ast_index_expr(operand, indices[0], open, close)
+            case 2:
+                #partial switch interval.kind {
+                case .Comma:
+                   operand = ast_matrix_index_expr(operand, indices[0], indices[1], open, close)
+                case .Colon:
+                   operand = ast_slice_expr(operand, indices[0], indices[1], interval, open, close)
+                case:
+                    err = syntax_error(p, "Invalid interval symbol for index expression")
+                    operand = ast_bad_expr(open, close)
+                    return operand, err
+                }
+            case:
+                if interval.kind != .Comma {
+                    err = syntax_error(p, "Invalid interval symbol for index expression")
+                    operand = ast_bad_expr(open, close)
+                    return operand, err
+                }
+                operand = ast_tensor_index_expr(operand, indices[:], open, close)
+            }
+
+        case .Pointer:
+            token := expect_token(p, .Pointer) or_return
+            operand = ast_deref_expr(operand, token)
+
+        case .Open_Brace:
+            if (!lhs && is_literal_type(operand) && p.expr_level >= 0) {
+                operand = parse_compound_literal(p, operand) or_return
+            } 
+            else { loop = false}
+
+        case:
+            loop = false
+        }
+
+        lhs = false
+    }
+
+    node = operand
+    return
+}
+
+
+parse_unary_expr :: proc(p: ^Parser, lhs: bool) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    #partial switch p.curr_token.kind {
+    case .Cast:
+        token := advance_token(p)
+        expect_token(p, .Open_Paren) or_return
+        type := parse_type(p) or_return
+        expect_token(p, .Close_Paren) or_return
+        expr := parse_unary_expr(p, lhs) or_return
+        node = ast_cast_expr(type, expr, token)
+        return
+
+    case .Add, .Sub, .Xor, .And, .Not:
+        token := advance_token(p)
+        expr := parse_unary_expr(p, lhs) or_return
+        node = ast_unary_expr(expr, token)
+        return
+    }
+
+    expr := parse_operand(p, lhs) or_return
+    node = parse_atom_expr(p, expr, lhs) or_return
+    return
+}
+
+
+token_precedence :: proc(t: Token_Kind) -> int {
+    #partial switch t {
+    case .If:
+        return 1
+    case .Ellipsis:
+        return 2
+    case .Cmp_Or:
+        return 3
+    case .Cmp_And:
+        return 4
+    case .Cmp_Eq, .Not_Eq, .Lt, .Gt, .Lt_Eq, .Gt_Eq:
+        return 5
+    case .Add, .Sub, .Or, .Xor:
+        return 6
+    case .Mul, .Div, .Mod, .Rem, .And, .And_Not, .Shl, .Shr:
+        return 7
+    }
+    return 0
+}
+
+
+parse_binary_expr :: proc(p: ^Parser, lhs: bool, prec_in: int) -> (node: ^Ast_Node, err: Parsing_Error) { 
+    lhs := lhs
+    expr := parse_unary_expr(p, lhs) or_return
     for {
-        subnode: Expression
-        next_token := parser_scan(p)
-        if next_token.type == .Close_Brace do break
+        op := p.curr_token
+        op_prec := token_precedence(op.kind)
+        if op_prec < prec_in do break 
 
-        #partial switch next_token.type {
-        case .Identifier: 
-            subnode = parse_variable_expression(p, next_token) or_return
-            append(&body, subnode)
-        case .Conditional_Keyword: 
-            subnode = parse_conditional_expression(p) or_return
-            append(&body, subnode)
-        case .For_Keyword: 
-            subnode = parse_loop_expression(p) or_return
-            append(&body, subnode)
-        case:
-            log.errorf("Unexpected token: %v", next_token)
-            err = .Syntax_Error
+        prev := p.prev_token
+        if op.kind == .If {
+            if prev.pos.line < op.pos.line {
+                node = expr
+                return
+            }
+        }
+        if !is_operator(op.kind) && op.kind != .If {
+            err = syntax_error(p, "Expected an operator")
+            return
+        }
+        advance_token(p)
+
+        if op.kind == .If {
+            x           := expr
+            cond        := parse_expr(p, lhs) or_return
+            else_token  := expect_token(p, .Else) or_return
+            y           := parse_expr(p, lhs) or_return
+            expr         = ast_ternary_if_expr(x, cond, y)
+        } else {
+            right := parse_binary_expr(p, false, op_prec + 1) or_return
+            if right == nil {
+                err = syntax_error(p, "Expected expression on the right-hand side of the binary operator")
+                return
+            }
+            expr = ast_binary_expr(expr, right, op)
+        }
+
+        lhs = false
+    }
+
+    node = expr
+    return
+}
+
+
+parse_expr :: proc(p: ^Parser, lhs: bool) -> (node: ^Ast_Node, err: Parsing_Error) {
+    return parse_binary_expr(p, lhs, 1)
+}
+
+
+parse_expr_list :: proc(p: ^Parser, lhs: bool) -> (list: [dynamic]^Ast_Node, err: Parsing_Error) {
+    for {
+        expr := parse_expr(p, lhs) or_return
+        append(&list, expr)
+        if p.curr_token.kind != .Comma || p.curr_token.kind == .EOF do break
+        advance_token(p)
+    }
+    return 
+}
+
+
+parse_lhs_expr_list :: proc(p: ^Parser) -> (node: [dynamic]^Ast_Node, err: Parsing_Error) {
+    return parse_expr_list(p, true)
+}
+
+
+parse_rhs_expr_list :: proc(p: ^Parser) -> (node: [dynamic]^Ast_Node, err: Parsing_Error) {
+    return parse_expr_list(p, false)
+}
+
+
+parse_call_expr :: proc(p: ^Parser, operand: ^Ast_Node) -> (node: ^Ast_Node, err: Parsing_Error) {
+    args: [dynamic]^Ast_Node
+    defer delete(args)
+    
+    prev_expr_level := p.expr_level
+    p.expr_level = 0
+    open_paren := expect_token(p, .Open_Paren) or_return
+    for p.curr_token.kind != .Close_Paren && p.curr_token.kind != .EOF {
+        if p.curr_token.kind == .Comma {
+            err = syntax_error(p, "Expected an expression not ,")
+            return
+        } else if p.curr_token.kind == .Eq {
+            err = syntax_error(p, "Expected an expression not =")
+            return
+        }
+        
+        arg := parse_expr(p, false) or_return
+        
+        if p.curr_token.kind == .Eq {
+            eq := expect_token(p, .Eq) or_return
+            value := parse_value(p) or_return
+            arg = ast_field_value(arg, value, eq)
+        }
+
+        append(&args, arg)
+        if p.curr_token.kind != .Close_Paren do expect_token(p, .Comma) or_return
+    }
+    p.expr_level = prev_expr_level
+    close_paren := expect_token(p, .Close_Paren) or_return
+    node = ast_call_expr(operand, args[:], open_paren, close_paren)
+    return
+}
+
+
+parse_value_decl :: proc(p: ^Parser, names: []^Ast_Node) -> (node: ^Ast_Node, err: Parsing_Error) {
+    values: [dynamic]^Ast_Node
+    is_mutable := true
+    type := parse_type_or_ident(p) or_return
+    
+    if p.curr_token.kind == .Eq || p.curr_token.kind == .Colon {
+        sep: Token
+        if !is_mutable {
+            sep = expect_token(p, .Colon) or_return
+        } else {
+            sep = advance_token(p)
+            is_mutable = sep.kind != .Colon
+        }
+        
+        values = parse_rhs_expr_list(p) or_return
+        
+        if len(values) > len(names) {
+            err = syntax_error(p, "Too many values on the right hand side of the declaration")
+            return
+        } else if len(values) < len(names) && !is_mutable {
+            err = syntax_error(p, "All constant declarations must be defined")
+            return
+        } else if len(values) == 0 {
+            err = syntax_error(p, "Expected an expression for this declaration")
             return
         }
     }
-    return
-}
-
-
-parse :: proc(token_stream: [dynamic]Token) -> (ast: [dynamic]AST_Node, err: Parsing_Error) {
-    p := parser_init(token_stream)
-    ast = make([dynamic]AST_Node)
-
-    node: AST_Node
-    next_token: Token
     
-    node = parse_module_header(&p) or_return
-    append(&ast, node)
-
-    // Grid Layout
-    next_token = parser_scan(&p)
-    expect_token_type(next_token, .Layout_Keyword, "Grid layout must be declared at the top of every Saga file") or_return
-
-    node = parse_layout(&p, true) or_return
-    append(&ast, node)
-
-    // Block Layout
-    next_token = parser_scan(&p)
-    expect_token_type(next_token, .Layout_Keyword, "Block layout must be declared at the top of every Saga file") or_return
-
-    node = parse_layout(&p) or_return
-    append(&ast, node)
-
-    next_token = parser_scan(&p)
-    expect_token_type(next_token, .Identifier, "Only declarations are allowed at file scope") or_return
-
-    node = parse_initial_identifier(&p, next_token) or_return
-
-    #partial switch n in node {
-    case Constant_Assignment:
-        append(&ast, node)
-
-    case Kernel_Signature:
-        sig := n
-        body := make([dynamic]Expression)
-
-        next_token = parser_scan(&p)
-        expect_token_type(next_token, .Open_Brace) or_return
-
-        body = parse_block(&p) or_return
-
-        parser_scan(&p)
-        node = Kernel{sig, body}
-        append(&ast, node)
+    if is_mutable {
+        if type == nil && len(values) == 0 {
+            err = syntax_error(p, "Missing variable type or initialization")
+            node = ast_bad_decl(p.curr_token, p.curr_token)
+            return
+        }
+    } else {
+        if type == nil && len(values) == 0 && len(names) > 0 {
+            err = syntax_error(p, "Missing constant value")
+            node = ast_bad_decl(p.curr_token, p.curr_token)
+            return
+        }
     }
+    
+    node = ast_value_decl(names, type, values[:], is_mutable)
     return
 }
 
+
+parse_block_stmt :: proc (p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    if p.curr_proc == nil {
+        err = syntax_error(p, "You cannot use a block statement in the file scope");
+        node = ast_bad_stmt(p.curr_token, p.curr_token)
+        return
+    }
+    return parse_body(p)
+}
+
+
+parse_return_stmt :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    token := expect_token(p, .Return) or_return
+    
+    if p.curr_proc == nil {
+        err = syntax_error(p, "You cannot use a return statement in the file scope")
+        node = ast_bad_stmt(token, p.curr_token)
+        return
+    }
+    
+    if p.expr_level > 0 {
+        err = syntax_error(p, "You cannot use a return statement within an expression")
+        node = ast_bad_stmt(token, p.curr_token)
+        return
+    }
+    
+    results: [dynamic]^Ast_Node
+    for p.curr_token.kind != .Close_Brace {
+        arg := parse_expr(p, false) or_return
+        append(&results, arg)
+        
+        if p.curr_token.kind != .Comma || p.curr_token.kind == .EOF {
+            break
+        }
+        advance_token(p)
+    }
+    
+    node = ast_return_stmt(results[:], token)
+    return
+}
+
+
+parse_defer_stmt :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    if p.curr_proc == nil {
+        err = syntax_error(p, "You cannot use a defer statement in the file scope")
+        node = ast_bad_stmt(p.curr_token, p.curr_token)
+        return
+    }
+    
+    token := expect_token(p, .Defer) or_return
+    stmt := parse_stmt(p) or_return
+    
+    #partial switch stmt.kind {
+    case .Defer_Stmt:
+        err = syntax_error(p, "You cannot defer a defer statement")
+        return
+    case .Return_Stmt:
+        err = syntax_error(p, "You cannot defer a return statement")
+        return
+    }
+    
+    node = ast_defer_stmt(stmt, token)
+    return
+}
+
+
+// parse_if_stmt :: proc(p: ^Parser) -> ^Ast_Node {
+//     if p.curr_proc == nil {
+//         syntax_error(p, "You cannot use an if statement in the file scope")
+//         return ast_bad_stmt(p.curr_token, p.curr_token)
+//     }
+//     top_if_stmt, prev_if_stmt: ^Ast_Node
+//     if_else_chain: for {
+//         token := expect_token(p, .If)
+//         cond, body, else_stmt: ^Ast_Node
+//
+//         prev_level := p.expr_level
+//         p.expr_level = -1
+//         cond = parse_expr(p, false)
+//         p.expr_level = prev_level
+//         if cond == nil do syntax_error(p, "Expected condition for if statement")
+//
+//         body = parse_block_stmt(p)
+//         curr_if_stmt := ast_if_stmt(cond, body, nil, token)
+//
+//         if top_if_stmt == nil {
+//             top_if_stmt = curr_if_stmt
+//         }
+//         if prev_if_stmt != nil {
+//             prev_if_stmt.derived.(if_stmt).else_stmt = curr_if_stmt
+//         }
+//         if p.curr_token.kind == .Else {
+//             else_token := expect_token(p, .Else)
+//             #partial switch p.curr_token.kind {
+//             case .If:
+//                 prev_if_stmt = curr_if_stmt
+//                 continue if_else_chain
+//             case .Open_Brace:
+//                 else_stmt = parse_block_stmt(p)
+//             case:
+//                 syntax_error(p, "Expected if statement or block statement")
+//                 else_stmt = ast_bad_stmt(p.curr_token, p.tokens[p.curr_token_index+1])
+//             }
+//         }
+//         curr_if_stmt.(If_Stmt).else_stmt = else_stmt
+//         return top_if_stmt
+//     }
+// }
+
+
+parse_if_stmt :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    if p.curr_proc == nil {
+        err = syntax_error(p, "You cannot use an if statement in the file scope")
+        node = ast_bad_stmt(p.curr_token, p.curr_token)
+        return
+    }
+    token := expect_token(p, .If) or_return
+
+    prev_level := p.expr_level 
+    p.expr_level = -1
+    cond := parse_expr(p, false) or_return
+    p.expr_level = prev_level
+   
+    if cond == nil {
+        err = syntax_error(p, "Expected condition for if statement")
+        return
+    }
+    body := parse_block_stmt(p) or_return
+    node = ast_if_stmt(cond, body, nil, token)
+    return
+}
+
+
+parse_control_statement_semicolon_separator :: proc(p: ^Parser) -> bool {
+    token := peek_token(p)
+    if token.kind != .Open_Brace do return allow_token(p, .Semicolon)
+    if p.curr_token.kind == .Semicolon do return allow_token(p, .Semicolon)
+    return false
+}
+
+
+parse_for_stmt :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    if p.curr_proc == nil {
+        err = syntax_error(p, "You cannot use a for statement in the file scope")
+        node = ast_bad_stmt(p.curr_token, p.curr_token)
+        return
+    }
+    token := expect_token(p, .For) or_return
+    init, cond, post, body: ^Ast_Node
+    is_range := false
+    
+    if p.curr_token.kind != .Open_Brace {
+        prev_level := p.expr_level
+        defer p.expr_level = prev_level
+        p.expr_level = -1
+        if p.curr_token.kind != .Semicolon {
+            cond = parse_simple_stmt(p) or_return
+            if cond.kind == .Assign_Stmt && cond.derived.(Assign_Stmt).op.kind == .In {
+                is_range = true
+            }
+        }
+        if !is_range && parse_control_statement_semicolon_separator(p) {
+            init = cond
+            cond = nil
+            
+            if p.curr_token.kind == .Open_Brace {
+                err = syntax_error(p, "Expected ';', followed by a condition expression and post statement")
+                return
+            } else {
+                if p.curr_token.kind != .Semicolon {
+                    cond = parse_simple_stmt(p) or_return
+                }
+                expect_token(p, .Semicolon) or_return
+                if p.curr_token.kind != .Open_Brace {
+                    post = parse_simple_stmt(p) or_return
+                }
+            }
+        }
+    }
+    body = parse_block_stmt(p) or_return
+    if is_range {
+        in_token := cond.derived.(Assign_Stmt).op
+        vals := cond.derived.(Assign_Stmt).lhs
+        rhs: ^Ast_Node
+        if len(cond.derived.(Assign_Stmt).rhs) > 0 {
+            rhs = cond.derived.(Assign_Stmt).rhs[0]
+        }
+        node = ast_range_stmt(vals, rhs, body, in_token, token)
+        return
+    }
+    
+    node = ast_for_stmt(init, cond, post, body, token)
+    return
+}
+
+
+parse_simple_stmt :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    token := p.curr_token
+    lhs := parse_lhs_expr_list(p) or_return
+    token = p.curr_token
+    #partial switch token.kind {
+    case .Eq, 
+         .Add_Eq, 
+         .Sub_Eq, 
+         .Mul_Eq,
+         .Div_Eq, 
+         .Mod_Eq, 
+         .Rem_Eq, 
+         .And_Eq,
+         .Or_Eq, 
+         .Xor_Eq, 
+         .Shl_Eq, 
+         .Shr_Eq,
+         .And_Not_Eq, 
+         .Cmp_And_Eq, 
+         .Cmp_Or_Eq:
+
+        advance_token(p)
+        rhs := parse_rhs_expr_list(p) or_return
+        if len(rhs) == 0 {
+            err = syntax_error(p, "No right-hand side in assignment statement.")
+            node = ast_bad_stmt(token, p.curr_token)
+            return
+        }
+	node = ast_assign_stmt(lhs[:], rhs[:], token)
+        return
+
+    case .Colon:
+        advance_token(p)
+        return parse_value_decl(p, lhs[:])
+    }
+
+    node = ast_bad_stmt(token, p.curr_token)
+    return
+}
+
+
+parse_stmt :: proc(p: ^Parser) -> (node: ^Ast_Node, err: Parsing_Error) {
+    token := p.curr_token
+    #partial switch token.kind {
+    case .Identifier, 
+         .Kernel,  
+         .Shader, 
+         .Proc,  
+         .Integer, 
+         .Float, 
+         .Imaginary, 
+         .Open_Paren,
+         .Pointer, 
+         .Add, 
+         .Sub, 
+         .Xor, 
+         .Not, 
+         .And:
+        return parse_simple_stmt(p)
+    case .If:     
+        return parse_if_stmt(p);
+    case .For:    
+        return parse_for_stmt(p);
+    case .Return: 
+        return parse_return_stmt(p);
+    case .Defer:  
+        return parse_defer_stmt(p);
+    case .Open_Brace:
+        return parse_block_stmt(p);
+    }
+
+    err = syntax_error(p, fmt.tprintf("Expected 'a statement', got '%v'", token.kind))
+    node = ast_bad_stmt(token, token)
+    if p.curr_token == token do advance_token(p)
+    return
+}
+
+
+parse_stmt_list :: proc(p: ^Parser) -> (list: [dynamic]^Ast_Node, err: Parsing_Error) {
+    for p.curr_token.kind != .Close_Brace && p.curr_token.kind != .EOF {
+        stmt := parse_stmt(p) or_return
+        append(&list, stmt)
+    }
+   return
+}
+
+
+parse_file :: proc(p: ^Parser) -> (nodes: [dynamic]^Ast_Node, err: Parsing_Error) {
+    if len(p.tokens) == 0 || p.tokens[0].kind == .EOF {
+        fmt.println("Empty File!")
+        return
+    }
+
+    module_token    := expect_token(p, .Module) or_return
+    name_token      := expect_token(p, .Identifier) or_return
+    module_ast      := ast_module_decl(name_token, module_token)
+    append(&nodes, module_ast)
+
+    for p.curr_token.kind != .EOF {
+        next_node := parse_stmt(p) or_return
+        append(&nodes, next_node)
+    }
+    return nodes, nil
+}

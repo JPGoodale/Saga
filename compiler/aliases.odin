@@ -2,6 +2,10 @@ package saga_compiler
 import "core:strings"
 import "core:strconv"
 import "core:unicode"
+import scanner "core:text/scanner"
+
+Scanner             :: scanner.Scanner
+Position            :: scanner.Position
 
 is_space            :: unicode.is_space
 is_alpha            :: unicode.is_alpha

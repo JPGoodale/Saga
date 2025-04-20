@@ -1,9 +1,7 @@
 module vec_mul
 
-
 main :: kernel(input, weight: [1024]f32, N: u32) -> (out: [1024]f32) {
     if thread.x < N {
         out[thread.x] = weight[thread.x] * input[thread.x]
     }
 }
-
